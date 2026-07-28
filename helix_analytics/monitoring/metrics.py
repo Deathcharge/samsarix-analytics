@@ -1,409 +1,654 @@
-"""
-Helix Metrics Collection System
-Real-time metrics tracking for Helix Collective components
-"""
+"""Thread-safe, bounded in-process metric instruments."""
 
-import logging
-import os
+from __future__ import annotations
+
+import json
+import math
 import re
-import threading
-import time
-from collections import defaultdict
+from collections import deque
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from threading import RLock
+from time import perf_counter
+from typing import Final
 
-import psutil
+_METRIC_NAME: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+_LABEL_NAME: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+_HISTOGRAM_AGGREGATIONS: Final = frozenset(
+    {"count", "sum", "avg", "min", "max", "p50", "p90", "p95", "p99"}
+)
 
-logger = logging.getLogger(__name__)
+
+class MetricError(ValueError):
+    """Base exception for invalid metric definitions or observations."""
 
 
-@dataclass
-class Metric:
-    """Single metric data point."""
+class CardinalityLimitError(MetricError):
+    """Raised when a new label set would exceed an instrument's series limit."""
 
-    name: str
+
+@dataclass(frozen=True)
+class MetricSample:
+    """A numeric view of one metric series used by alert evaluation."""
+
+    metric: str
+    labels: Mapping[str, str]
+    aggregation: str
     value: float
-    timestamp: float
-    tags: dict[str, str] = field(default_factory=dict)
+
+
+def _finite_number(value: float | int, *, field_name: str = "value") -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise MetricError(f"{field_name} must be a finite number")
+    normalized = float(value)
+    if not math.isfinite(normalized):
+        raise MetricError(f"{field_name} must be a finite number")
+    return normalized
+
+
+def _finite_sum(left: float, right: float, *, field_name: str) -> float:
+    result = left + right
+    if not math.isfinite(result):
+        raise MetricError(f"{field_name} would exceed the finite numeric range")
+    return result
+
+
+def _format_float(value: float) -> str:
+    return format(value, ".17g")
+
+
+def _escape_help(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("\r", "\\n").replace("\n", "\\n")
+
+
+def _escape_label(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+
+
+def _percentile(values: Sequence[float], percentile: float) -> float:
+    ordered = sorted(values)
+    if not ordered:
+        raise MetricError("cannot calculate a percentile without observations")
+    position = (len(ordered) - 1) * percentile / 100
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    fraction = position - lower
+    return ordered[lower] + fraction * (ordered[upper] - ordered[lower])
 
 
 @dataclass
-class MetricSummary:
-    """Summary statistics for a metric."""
-
-    name: str
-    count: int
-    min: float
-    max: float
-    avg: float
-    sum: float
-    last_value: float
-    last_timestamp: float
+class _HistogramSeries:
+    count: int = 0
+    total: float = 0.0
+    minimum: float | None = None
+    maximum: float | None = None
+    bucket_counts: list[int] = field(default_factory=list)
+    recent: deque[float] = field(default_factory=deque)
 
 
-class MetricsRegistry:
-    """Central metrics registry for collecting and storing metrics."""
+class _Instrument:
+    kind: str
 
-    _MAX_POINTS_PER_METRIC = 5_000  # Cap per-metric list to prevent unbounded growth
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        label_names: Sequence[str],
+        *,
+        max_series: int,
+        max_label_value_length: int,
+    ) -> None:
+        if not _METRIC_NAME.fullmatch(name):
+            raise MetricError("metric names must match ^[a-zA-Z_][a-zA-Z0-9_]*$")
+        if not description.strip():
+            raise MetricError("metric description cannot be empty")
+        if max_series < 1:
+            raise MetricError("max_series must be at least 1")
+        if max_label_value_length < 1:
+            raise MetricError("max_label_value_length must be at least 1")
 
-    def __init__(self):
-        self._metrics: dict[str, list[Metric]] = defaultdict(list)
-        self._counters: dict[str, float] = defaultdict(float)
-        self._gauges: dict[str, float] = {}
-        self._histograms: dict[str, list[float]] = defaultdict(list)
-        self._lock = threading.Lock()
+        normalized_names = tuple(label_names)
+        if len(set(normalized_names)) != len(normalized_names):
+            raise MetricError("label names must be unique")
+        for label_name in normalized_names:
+            if not _LABEL_NAME.fullmatch(label_name) or label_name.startswith("__"):
+                raise MetricError(f"invalid label name: {label_name!r}")
 
-    def _trim_list(self, lst: list, max_size: int | None = None) -> list:
-        """Trim a list to max_size, keeping the most recent entries."""
-        cap = max_size or self._MAX_POINTS_PER_METRIC
-        if len(lst) > cap:
-            return lst[-cap:]
-        return lst
+        self.name = name
+        self.description = description.strip()
+        self.label_names = normalized_names
+        self.max_series = max_series
+        self.max_label_value_length = max_label_value_length
+        self._lock = RLock()
 
-    def increment(self, name: str, value: float = 1.0, tags: dict[str, str] | None = None):
-        """Increment a counter metric."""
+    def _key(self, labels: Mapping[str, object]) -> tuple[str, ...]:
+        provided = set(labels)
+        expected = set(self.label_names)
+        missing = sorted(expected - provided)
+        extra = sorted(provided - expected)
+        if missing or extra:
+            details: list[str] = []
+            if missing:
+                details.append(f"missing labels: {', '.join(missing)}")
+            if extra:
+                details.append(f"unknown labels: {', '.join(extra)}")
+            raise MetricError("; ".join(details))
+
+        values: list[str] = []
+        for name in self.label_names:
+            value = str(labels[name])
+            if any(ord(character) < 32 and character not in "\t\n" for character in value):
+                raise MetricError(f"label {name!r} contains an unsupported control character")
+            if len(value) > self.max_label_value_length:
+                raise MetricError(
+                    f"label {name!r} exceeds {self.max_label_value_length} characters"
+                )
+            values.append(value)
+        return tuple(values)
+
+    def _labels(self, key: tuple[str, ...]) -> dict[str, str]:
+        return dict(zip(self.label_names, key, strict=True))
+
+    def _render_labels(self, key: tuple[str, ...], extra: tuple[tuple[str, str], ...] = ()) -> str:
+        pairs = [*zip(self.label_names, key, strict=True), *extra]
+        if not pairs:
+            return ""
+        rendered = ",".join(f'{name}="{_escape_label(value)}"' for name, value in pairs)
+        return "{" + rendered + "}"
+
+    def definition(self) -> tuple[object, ...]:
+        return (self.kind, self.description, self.label_names, self.max_series)
+
+    def snapshot(self) -> dict[str, object]:
+        raise NotImplementedError
+
+    def query(self, aggregation: str) -> list[MetricSample]:
+        raise NotImplementedError
+
+    def prometheus_lines(self) -> list[str]:
+        raise NotImplementedError
+
+
+class Counter(_Instrument):
+    """A monotonically increasing labeled counter."""
+
+    kind = "counter"
+
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        label_names: Sequence[str] = (),
+        *,
+        max_series: int = 100,
+        max_label_value_length: int = 200,
+    ) -> None:
+        super().__init__(
+            name,
+            description,
+            label_names,
+            max_series=max_series,
+            max_label_value_length=max_label_value_length,
+        )
+        self._values: dict[tuple[str, ...], float] = {}
+
+    def inc(self, amount: float = 1.0, **labels: object) -> None:
+        increment = _finite_number(amount, field_name="counter increment")
+        if increment < 0:
+            raise MetricError("counter increments cannot be negative")
+        key = self._key(labels)
         with self._lock:
-            self._counters[name] += value
-            self._metrics[name].append(Metric(name=name, value=value, timestamp=time.time(), tags=tags or {}))
-            self._metrics[name] = self._trim_list(self._metrics[name])
-
-    def set_gauge(self, name: str, value: float, tags: dict[str, str] | None = None):
-        """Set a gauge metric."""
-        with self._lock:
-            self._gauges[name] = value
-            self._metrics[name].append(Metric(name=name, value=value, timestamp=time.time(), tags=tags or {}))
-            self._metrics[name] = self._trim_list(self._metrics[name])
-
-    def observe(self, name: str, value: float, tags: dict[str, str] | None = None):
-        """Observe a histogram metric."""
-        with self._lock:
-            self._histograms[name].append(value)
-            self._histograms[name] = self._trim_list(self._histograms[name])
-            self._metrics[name].append(Metric(name=name, value=value, timestamp=time.time(), tags=tags or {}))
-            self._metrics[name] = self._trim_list(self._metrics[name])
-
-    def get_counter(self, name: str) -> float:
-        """Get counter value."""
-        return self._counters.get(name, 0.0)
-
-    def get_gauge(self, name: str) -> float | None:
-        """Get gauge value."""
-        return self._gauges.get(name)
-
-    def get_histogram_summary(self, name: str, percentiles: list[float] | None = None) -> dict[str, float]:
-        """Get histogram summary statistics."""
-        if percentiles is None:
-            percentiles = [0.5, 0.9, 0.95, 0.99]
-
-        values = sorted(self._histograms.get(name, []))
-        if not values:
-            return {}
-
-        summary = {
-            "count": len(values),
-            "sum": sum(values),
-            "avg": sum(values) / len(values),
-            "min": values[0],
-            "max": values[-1],
-        }
-
-        for p in percentiles:
-            idx = int(p * len(values))
-            summary[f"p{int(p * 100)}"] = values[idx]
-
-        return summary
-
-    def get_metric_summary(self, name: str) -> MetricSummary | None:
-        """Get summary statistics for a metric."""
-        with self._lock:
-            metrics = self._metrics.get(name, [])
-            if not metrics:
-                return None
-
-            values = [m.value for m in metrics]
-            return MetricSummary(
-                name=name,
-                count=len(metrics),
-                min=min(values),
-                max=max(values),
-                avg=sum(values) / len(values),
-                sum=sum(values),
-                last_value=values[-1],
-                last_timestamp=metrics[-1].timestamp,
+            if key not in self._values and len(self._values) >= self.max_series:
+                raise CardinalityLimitError(
+                    f"metric {self.name!r} reached its {self.max_series}-series limit"
+                )
+            self._values[key] = _finite_sum(
+                self._values.get(key, 0.0),
+                increment,
+                field_name="counter value",
             )
 
-    def get_all_metrics(self) -> dict[str, Any]:
-        """Get all current metric values."""
+    def value(self, **labels: object) -> float:
+        key = self._key(labels)
         with self._lock:
-            return {
-                "counters": dict(self._counters),
-                "gauges": dict(self._gauges),
-                "histograms": {k: self.get_histogram_summary(k) for k in self._histograms},
-            }
+            return self._values.get(key, 0.0)
 
-    def reset(self):
-        """Reset all metrics."""
+    def snapshot(self) -> dict[str, object]:
         with self._lock:
-            self._metrics.clear()
-            self._counters.clear()
-            self._gauges.clear()
-            self._histograms.clear()
+            series = [
+                {"labels": self._labels(key), "value": value}
+                for key, value in sorted(self._values.items())
+            ]
+        return {
+            "name": self.name,
+            "type": self.kind,
+            "description": self.description,
+            "series": series,
+        }
 
-    def cleanup_old_metrics(self, max_age_seconds: int = 3600):
-        """Remove metrics older than max_age_seconds."""
-        cutoff_time = time.time() - max_age_seconds
-
+    def query(self, aggregation: str = "value") -> list[MetricSample]:
+        if aggregation != "value":
+            raise MetricError("counters support only the 'value' aggregation")
         with self._lock:
-            for name, metrics in self._metrics.items():
-                self._metrics[name] = [m for m in metrics if m.timestamp > cutoff_time]
+            return [
+                MetricSample(self.name, self._labels(key), aggregation, value)
+                for key, value in sorted(self._values.items())
+            ]
+
+    def prometheus_lines(self) -> list[str]:
+        with self._lock:
+            samples = [
+                f"{self.name}{self._render_labels(key)} {_format_float(value)}"
+                for key, value in sorted(self._values.items())
+            ]
+        return [
+            f"# HELP {self.name} {_escape_help(self.description)}",
+            f"# TYPE {self.name} counter",
+            *samples,
+        ]
 
 
-class HelixMetrics:
-    """High-level metrics interface for Helix components."""
+class Gauge(_Instrument):
+    """A labeled value that may increase or decrease."""
 
-    _instance: "HelixMetrics | None" = None
+    kind = "gauge"
 
-    def __init__(self):
-        self.registry = MetricsRegistry()
-        self.start_time = time.time()
-
-    @classmethod
-    def get_instance(cls) -> "HelixMetrics":
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
-
-    # Cache Metrics
-    def cache_hit(self, tags: dict[str, str] | None = None):
-        self.registry.increment("cache.hits", tags=tags)
-
-    def cache_miss(self, tags: dict[str, str] | None = None):
-        self.registry.increment("cache.misses", tags=tags)
-
-    def cache_set(self, tags: dict[str, str] | None = None):
-        self.registry.increment("cache.sets", tags=tags)
-
-    def cache_delete(self, tags: dict[str, str] | None = None):
-        self.registry.increment("cache.deletes", tags=tags)
-
-    def cache_size(self, size: int):
-        self.registry.set_gauge("cache.size", size)
-
-    def cache_hit_rate(self) -> float:
-        hits = self.registry.get_counter("cache.hits")
-        misses = self.registry.get_counter("cache.misses")
-        total = hits + misses
-        return (hits / total * 100) if total > 0 else 0.0
-
-    # HTTP Metrics
-    def http_request(
+    def __init__(
         self,
-        method: str,
-        status: int,
-        duration: float,
-        tags: dict[str, str] | None = None,
-    ):
-        metric_tags = {"method": method, "status": str(status)}
-        if tags:
-            metric_tags.update(tags)
+        name: str,
+        description: str,
+        label_names: Sequence[str] = (),
+        *,
+        max_series: int = 100,
+        max_label_value_length: int = 200,
+    ) -> None:
+        super().__init__(
+            name,
+            description,
+            label_names,
+            max_series=max_series,
+            max_label_value_length=max_label_value_length,
+        )
+        self._values: dict[tuple[str, ...], float] = {}
 
-        self.registry.increment("http.requests_total", tags=metric_tags)
-        self.registry.observe("http.request_duration_seconds", duration, tags=metric_tags)
+    def set(self, value: float, **labels: object) -> None:
+        normalized = _finite_number(value)
+        key = self._key(labels)
+        with self._lock:
+            if key not in self._values and len(self._values) >= self.max_series:
+                raise CardinalityLimitError(
+                    f"metric {self.name!r} reached its {self.max_series}-series limit"
+                )
+            self._values[key] = normalized
 
-        if status >= 500:
-            self.registry.increment("http.errors_5xx", tags=metric_tags)
-        elif status >= 400:
-            self.registry.increment("http.errors_4xx", tags=metric_tags)
+    def inc(self, amount: float = 1.0, **labels: object) -> None:
+        delta = _finite_number(amount, field_name="gauge increment")
+        key = self._key(labels)
+        with self._lock:
+            if key not in self._values and len(self._values) >= self.max_series:
+                raise CardinalityLimitError(
+                    f"metric {self.name!r} reached its {self.max_series}-series limit"
+                )
+            self._values[key] = _finite_sum(
+                self._values.get(key, 0.0),
+                delta,
+                field_name="gauge value",
+            )
 
-    # Agent Metrics
-    def agent_execution(self, agent_name: str, duration: float, success: bool):
-        tags = {"agent": agent_name, "success": str(success)}
-        self.registry.increment("agent.executions_total", tags=tags)
-        self.registry.observe("agent.execution_duration_seconds", duration, tags=tags)
+    def dec(self, amount: float = 1.0, **labels: object) -> None:
+        self.inc(-_finite_number(amount, field_name="gauge decrement"), **labels)
 
-        if success:
-            self.registry.increment("agent.executions_success", tags=tags)
-        else:
-            self.registry.increment("agent.executions_failure", tags=tags)
+    def value(self, **labels: object) -> float | None:
+        key = self._key(labels)
+        with self._lock:
+            return self._values.get(key)
 
-    # System Metrics
-    def system_optimization(self, speedup: float, coordination_delta: float):
-        self.registry.set_gauge("system.speedup_factor", speedup)
-        self.registry.set_gauge("system.coordination_delta", coordination_delta)
-        self.registry.increment("system.optimizations_total")
-
-    # System Metrics
-    def system_uptime(self) -> float:
-        return time.time() - self.start_time
-
-    def system_cpu_usage(self) -> float:
-        """Get current CPU usage percentage."""
-        return psutil.cpu_percent(interval=1)
-
-    def system_memory_usage(self) -> dict[str, float]:
-        """Get memory usage statistics."""
-        mem = psutil.virtual_memory()
+    def snapshot(self) -> dict[str, object]:
+        with self._lock:
+            series = [
+                {"labels": self._labels(key), "value": value}
+                for key, value in sorted(self._values.items())
+            ]
         return {
-            "total": mem.total / (1024**3),  # GB
-            "available": mem.available / (1024**3),  # GB
-            "used": mem.used / (1024**3),  # GB
-            "percentage": mem.percent,
+            "name": self.name,
+            "type": self.kind,
+            "description": self.description,
+            "series": series,
         }
 
-    def system_disk_usage(self) -> dict[str, float]:
-        """Get disk usage statistics."""
-        disk = psutil.disk_usage("/")
+    def query(self, aggregation: str = "value") -> list[MetricSample]:
+        if aggregation != "value":
+            raise MetricError("gauges support only the 'value' aggregation")
+        with self._lock:
+            return [
+                MetricSample(self.name, self._labels(key), aggregation, value)
+                for key, value in sorted(self._values.items())
+            ]
+
+    def prometheus_lines(self) -> list[str]:
+        with self._lock:
+            samples = [
+                f"{self.name}{self._render_labels(key)} {_format_float(value)}"
+                for key, value in sorted(self._values.items())
+            ]
+        return [
+            f"# HELP {self.name} {_escape_help(self.description)}",
+            f"# TYPE {self.name} gauge",
+            *samples,
+        ]
+
+
+class Histogram(_Instrument):
+    """A labeled histogram with all-time aggregates and bounded recent samples."""
+
+    kind = "histogram"
+
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        label_names: Sequence[str] = (),
+        *,
+        buckets: Sequence[float] = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+        max_series: int = 100,
+        max_samples: int = 1024,
+        max_label_value_length: int = 200,
+    ) -> None:
+        super().__init__(
+            name,
+            description,
+            label_names,
+            max_series=max_series,
+            max_label_value_length=max_label_value_length,
+        )
+        if "le" in self.label_names:
+            raise MetricError("histogram label name 'le' is reserved")
+        if max_samples < 1:
+            raise MetricError("max_samples must be at least 1")
+        normalized_buckets = tuple(
+            _finite_number(bucket, field_name="histogram bucket") for bucket in buckets
+        )
+        if not normalized_buckets or tuple(sorted(set(normalized_buckets))) != normalized_buckets:
+            raise MetricError("histogram buckets must be unique and strictly increasing")
+
+        self.buckets = normalized_buckets
+        self.max_samples = max_samples
+        self._series: dict[tuple[str, ...], _HistogramSeries] = {}
+
+    def definition(self) -> tuple[object, ...]:
+        return (*super().definition(), self.buckets, self.max_samples)
+
+    def observe(self, value: float, **labels: object) -> None:
+        observation = _finite_number(value, field_name="histogram observation")
+        key = self._key(labels)
+        with self._lock:
+            series = self._series.get(key)
+            if series is None:
+                if len(self._series) >= self.max_series:
+                    raise CardinalityLimitError(
+                        f"metric {self.name!r} reached its {self.max_series}-series limit"
+                    )
+                series = _HistogramSeries(
+                    bucket_counts=[0] * len(self.buckets),
+                    recent=deque(maxlen=self.max_samples),
+                )
+
+            updated_total = _finite_sum(
+                series.total,
+                observation,
+                field_name="histogram sum",
+            )
+            self._series.setdefault(key, series)
+
+            series.count += 1
+            series.total = updated_total
+            series.minimum = (
+                observation if series.minimum is None else min(series.minimum, observation)
+            )
+            series.maximum = (
+                observation if series.maximum is None else max(series.maximum, observation)
+            )
+            for index, upper_bound in enumerate(self.buckets):
+                if observation <= upper_bound:
+                    series.bucket_counts[index] += 1
+            series.recent.append(observation)
+
+    def _summary(self, series: _HistogramSeries) -> dict[str, object]:
+        values = list(series.recent)
         return {
-            "total": disk.total / (1024**3),  # GB
-            "used": disk.used / (1024**3),  # GB
-            "free": disk.free / (1024**3),  # GB
-            "percentage": disk.percent,
+            "count": series.count,
+            "sum": series.total,
+            "min": series.minimum,
+            "max": series.maximum,
+            "avg": series.total / series.count,
+            "recent_count": len(values),
+            "percentiles": {
+                "p50": _percentile(values, 50),
+                "p90": _percentile(values, 90),
+                "p95": _percentile(values, 95),
+                "p99": _percentile(values, 99),
+            },
+            "buckets": [
+                {"le": upper_bound, "count": series.bucket_counts[index]}
+                for index, upper_bound in enumerate(self.buckets)
+            ],
         }
 
-    def process_memory_usage(self) -> dict[str, float]:
-        """Get current process memory usage."""
-        process = psutil.Process(os.getpid())
-        mem_info = process.memory_info()
+    def summary(self, **labels: object) -> dict[str, object] | None:
+        key = self._key(labels)
+        with self._lock:
+            series = self._series.get(key)
+            return None if series is None else self._summary(series)
+
+    def snapshot(self) -> dict[str, object]:
+        with self._lock:
+            series = [
+                {"labels": self._labels(key), **self._summary(value)}
+                for key, value in sorted(self._series.items())
+            ]
         return {
-            "rss": mem_info.rss / (1024**2),  # MB
-            "vms": mem_info.vms / (1024**2),  # MB
-            "percentage": process.memory_percent(),
+            "name": self.name,
+            "type": self.kind,
+            "description": self.description,
+            "series": series,
         }
 
-    def update_system_metrics(self):
-        """Update system performance metrics."""
-        try:
-            # CPU usage
-            cpu_percent = self.system_cpu_usage()
-            self.registry.set_gauge("system.cpu_percent", cpu_percent)
+    def query(self, aggregation: str = "avg") -> list[MetricSample]:
+        if aggregation not in _HISTOGRAM_AGGREGATIONS:
+            supported = ", ".join(sorted(_HISTOGRAM_AGGREGATIONS))
+            raise MetricError(f"unsupported histogram aggregation; choose one of: {supported}")
 
-            # Memory usage
-            mem_usage = self.system_memory_usage()
-            self.registry.set_gauge("system.memory_total_gb", mem_usage["total"])
-            self.registry.set_gauge("system.memory_used_gb", mem_usage["used"])
-            self.registry.set_gauge("system.memory_percent", mem_usage["percentage"])
+        with self._lock:
+            samples: list[MetricSample] = []
+            for key, series in sorted(self._series.items()):
+                if aggregation == "count":
+                    value = float(series.count)
+                elif aggregation == "sum":
+                    value = series.total
+                elif aggregation == "avg":
+                    value = series.total / series.count
+                elif aggregation == "min":
+                    assert series.minimum is not None
+                    value = series.minimum
+                elif aggregation == "max":
+                    assert series.maximum is not None
+                    value = series.maximum
+                else:
+                    value = _percentile(list(series.recent), float(aggregation[1:]))
+                samples.append(MetricSample(self.name, self._labels(key), aggregation, value))
+            return samples
 
-            # Disk usage
-            disk_usage = self.system_disk_usage()
-            self.registry.set_gauge("system.disk_total_gb", disk_usage["total"])
-            self.registry.set_gauge("system.disk_used_gb", disk_usage["used"])
-            self.registry.set_gauge("system.disk_percent", disk_usage["percentage"])
+    def prometheus_lines(self) -> list[str]:
+        with self._lock:
+            samples: list[str] = []
+            for key, series in sorted(self._series.items()):
+                for index, upper_bound in enumerate(self.buckets):
+                    label_text = self._render_labels(key, (("le", _format_float(upper_bound)),))
+                    samples.append(f"{self.name}_bucket{label_text} {series.bucket_counts[index]}")
+                samples.append(
+                    f"{self.name}_bucket{self._render_labels(key, (('le', '+Inf'),))} "
+                    f"{series.count}"
+                )
+                samples.append(
+                    f"{self.name}_sum{self._render_labels(key)} {_format_float(series.total)}"
+                )
+                samples.append(f"{self.name}_count{self._render_labels(key)} {series.count}")
+        return [
+            f"# HELP {self.name} {_escape_help(self.description)}",
+            f"# TYPE {self.name} histogram",
+            *samples,
+        ]
 
-            # Process memory
-            proc_mem = self.process_memory_usage()
-            self.registry.set_gauge("process.memory_rss_mb", proc_mem["rss"])
-            self.registry.set_gauge("process.memory_vms_mb", proc_mem["vms"])
-            self.registry.set_gauge("process.memory_percent", proc_mem["percentage"])
 
-        except Exception as e:
-            # Log error but don't crash metrics collection
-            logger.error("Error updating system metrics: %s", e)
+Instrument = Counter | Gauge | Histogram
 
-    def get_dashboard_data(self) -> dict[str, Any]:
-        """Get all metrics for dashboard display."""
+
+class MetricRegistry:
+    """Owns a bounded collection of metric definitions and their in-memory series."""
+
+    def __init__(
+        self,
+        *,
+        max_metrics: int = 1000,
+        max_series_per_metric: int = 100,
+        max_histogram_samples: int = 1024,
+        max_label_value_length: int = 200,
+    ) -> None:
+        if max_metrics < 1:
+            raise MetricError("max_metrics must be at least 1")
+        if max_series_per_metric < 1:
+            raise MetricError("max_series_per_metric must be at least 1")
+        if max_histogram_samples < 1:
+            raise MetricError("max_histogram_samples must be at least 1")
+        if max_label_value_length < 1:
+            raise MetricError("max_label_value_length must be at least 1")
+        self.max_metrics = max_metrics
+        self.max_series_per_metric = max_series_per_metric
+        self.max_histogram_samples = max_histogram_samples
+        self.max_label_value_length = max_label_value_length
+        self._instruments: dict[str, Instrument] = {}
+        self._lock = RLock()
+
+    def _register(self, instrument: Instrument) -> Instrument:
+        with self._lock:
+            existing = self._instruments.get(instrument.name)
+            if existing is not None:
+                if existing.definition() != instrument.definition():
+                    raise MetricError(
+                        f"metric {instrument.name!r} is already registered "
+                        "with a different definition"
+                    )
+                return existing
+            if len(self._instruments) >= self.max_metrics:
+                raise CardinalityLimitError(f"registry reached its {self.max_metrics}-metric limit")
+            self._instruments[instrument.name] = instrument
+            return instrument
+
+    def counter(
+        self,
+        name: str,
+        description: str,
+        label_names: Sequence[str] = (),
+        *,
+        max_series: int | None = None,
+    ) -> Counter:
+        instrument = Counter(
+            name,
+            description,
+            label_names,
+            max_series=(self.max_series_per_metric if max_series is None else max_series),
+            max_label_value_length=self.max_label_value_length,
+        )
+        registered = self._register(instrument)
+        if not isinstance(registered, Counter):
+            raise MetricError(f"metric {name!r} is not a counter")
+        return registered
+
+    def gauge(
+        self,
+        name: str,
+        description: str,
+        label_names: Sequence[str] = (),
+        *,
+        max_series: int | None = None,
+    ) -> Gauge:
+        instrument = Gauge(
+            name,
+            description,
+            label_names,
+            max_series=(self.max_series_per_metric if max_series is None else max_series),
+            max_label_value_length=self.max_label_value_length,
+        )
+        registered = self._register(instrument)
+        if not isinstance(registered, Gauge):
+            raise MetricError(f"metric {name!r} is not a gauge")
+        return registered
+
+    def histogram(
+        self,
+        name: str,
+        description: str,
+        label_names: Sequence[str] = (),
+        *,
+        buckets: Sequence[float] = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+        max_series: int | None = None,
+        max_samples: int | None = None,
+    ) -> Histogram:
+        instrument = Histogram(
+            name,
+            description,
+            label_names,
+            buckets=buckets,
+            max_series=(self.max_series_per_metric if max_series is None else max_series),
+            max_samples=(self.max_histogram_samples if max_samples is None else max_samples),
+            max_label_value_length=self.max_label_value_length,
+        )
+        registered = self._register(instrument)
+        if not isinstance(registered, Histogram):
+            raise MetricError(f"metric {name!r} is not a histogram")
+        return registered
+
+    def get(self, name: str) -> Instrument:
+        with self._lock:
+            try:
+                return self._instruments[name]
+            except KeyError as exc:
+                raise MetricError(f"metric {name!r} is not registered") from exc
+
+    def query(self, name: str, aggregation: str = "value") -> list[MetricSample]:
+        return self.get(name).query(aggregation)
+
+    def snapshot(self) -> dict[str, object]:
+        with self._lock:
+            instruments = [self._instruments[name] for name in sorted(self._instruments)]
         return {
-            "uptime": self.system_uptime(),
-            "cache": {
-                "hits": self.registry.get_counter("cache.hits"),
-                "misses": self.registry.get_counter("cache.misses"),
-                "hit_rate": self.cache_hit_rate(),
-                "size": self.registry.get_gauge("cache.size"),
+            "schema_version": "helix-analytics/v1",
+            "limits": {
+                "max_metrics": self.max_metrics,
+                "max_series_per_metric": self.max_series_per_metric,
+                "max_histogram_samples": self.max_histogram_samples,
+                "max_label_value_length": self.max_label_value_length,
             },
-            "http": {
-                "requests_total": self.registry.get_counter("http.requests_total"),
-                "errors_4xx": self.registry.get_counter("http.errors_4xx"),
-                "errors_5xx": self.registry.get_counter("http.errors_5xx"),
-                "avg_duration": self.registry.get_metric_summary("http.request_duration_seconds"),
-            },
-            "agents": {
-                "executions_total": self.registry.get_counter("agent.executions_total"),
-                "success_rate": self._calculate_success_rate(),
-            },
-            "system": {
-                "speedup_factor": self.registry.get_gauge("system.speedup_factor"),
-                "coordination_delta": self.registry.get_gauge("system.coordination_delta"),
-                "optimizations_total": self.registry.get_counter("system.optimizations_total"),
-            },
+            "metrics": [instrument.snapshot() for instrument in instruments],
         }
 
-    def _calculate_success_rate(self) -> float:
-        success = self.registry.get_counter("agent.executions_success")
-        failure = self.registry.get_counter("agent.executions_failure")
-        total = success + failure
-        return (success / total * 100) if total > 0 else 0.0
+    def to_json(self, *, indent: int | None = 2) -> str:
+        return json.dumps(self.snapshot(), indent=indent, sort_keys=True)
+
+    def to_prometheus(self) -> str:
+        with self._lock:
+            instruments = [self._instruments[name] for name in sorted(self._instruments)]
+        lines = [line for instrument in instruments for line in instrument.prometheus_lines()]
+        return "\n".join(lines) + ("\n" if lines else "")
 
 
-def get_metrics() -> HelixMetrics:
-    """Get global metrics instance."""
-    return HelixMetrics.get_instance()
+@contextmanager
+def track_duration(histogram: Histogram, **labels: object) -> Iterator[None]:
+    """Observe elapsed monotonic seconds in ``histogram`` on success or failure."""
 
-
-async def initialize() -> None:
-    """Initialize the metrics system.
-
-    This function ensures the metrics singleton is created and ready for use.
-    Called during application startup.
-    """
-    # Get or create the singleton instance
-    _ = get_metrics()
-    # Any async initialization can be added here in the future
-
-
-# ============================================================================
-# Module-level convenience functions
-# ============================================================================
-# These are used by websocket_service.py and integration_hub.py which call
-# `from apps.backend.monitoring import metrics` then `metrics.increment_counter(...)`.
-
-
-async def increment_counter(name: str, tags: dict[str, str] | None = None) -> None:
-    """Increment a counter metric (module-level convenience function)."""
-    get_metrics().registry.increment(name, tags=tags)
-
-
-async def set_gauge(name: str, value: float, tags: dict[str, str] | None = None) -> None:
-    """Set a gauge metric (module-level convenience function)."""
-    get_metrics().registry.set_gauge(name, value, tags=tags)
-
-
-def _prometheus_metric_name(name: str) -> str:
-    sanitized = re.sub(r"[^a-zA-Z0-9_:]", "_", name)
-    if not sanitized or sanitized[0].isdigit():
-        sanitized = f"helix_{sanitized}"
-    if (
-        not sanitized.startswith("helix_")
-        and not sanitized.startswith("process_")
-        and not sanitized.startswith("system_")
-    ):
-        sanitized = f"helix_{sanitized}"
-    return sanitized
-
-
-def render_prometheus_metrics() -> str:
-    """Render collected metrics in Prometheus exposition format."""
-    metric_sets = get_metrics().registry.get_all_metrics()
-    lines: list[str] = []
-
-    for name, value in sorted(metric_sets.get("counters", {}).items()):
-        metric_name = _prometheus_metric_name(name)
-        lines.append(f"# TYPE {metric_name} counter")
-        lines.append(f"{metric_name} {float(value)}")
-
-    for name, value in sorted(metric_sets.get("gauges", {}).items()):
-        metric_name = _prometheus_metric_name(name)
-        lines.append(f"# TYPE {metric_name} gauge")
-        lines.append(f"{metric_name} {float(value)}")
-
-    for name, summary in sorted(metric_sets.get("histograms", {}).items()):
-        if not summary:
-            continue
-
-        metric_name = _prometheus_metric_name(name)
-        lines.append(f"# TYPE {metric_name}_count gauge")
-        lines.append(f"{metric_name}_count {float(summary.get('count', 0.0))}")
-        lines.append(f"# TYPE {metric_name}_sum gauge")
-        lines.append(f"{metric_name}_sum {float(summary.get('sum', 0.0))}")
-        lines.append(f"# TYPE {metric_name}_avg gauge")
-        lines.append(f"{metric_name}_avg {float(summary.get('avg', 0.0))}")
-
-    return "\n".join(lines) + "\n"
+    started = perf_counter()
+    try:
+        yield
+    finally:
+        histogram.observe(perf_counter() - started, **labels)

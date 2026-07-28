@@ -30,3 +30,8 @@ venv.bak/
 *.swo
 *~
 .DS_Store
+.coverage
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+htmlcov/

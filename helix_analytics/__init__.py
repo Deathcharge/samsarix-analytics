@@ -1,17 +1,15 @@
-"""Public monitoring primitives for :mod:`helix_analytics`."""
+"""Bounded in-process metrics and threshold alerting for Python applications."""
 
-from .alerting import (
+from .monitoring import (
     Alert,
     AlertManager,
     AlertRule,
     AlertSeverity,
     AlertStatus,
-    Comparison,
-    EvaluationResult,
-)
-from .metrics import (
     CardinalityLimitError,
+    Comparison,
     Counter,
+    EvaluationResult,
     Gauge,
     Histogram,
     MetricError,
@@ -19,6 +17,8 @@ from .metrics import (
     MetricSample,
     track_duration,
 )
+
+__version__ = "0.2.0"
 
 __all__ = [
     "Alert",
@@ -35,5 +35,6 @@ __all__ = [
     "MetricError",
     "MetricRegistry",
     "MetricSample",
+    "__version__",
     "track_duration",
 ]
