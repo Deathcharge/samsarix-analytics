@@ -1,0 +1,11 @@
+# Samsarix LLC repository ownership
+* @Deathcharge
+
+# Require explicit owner review for licensing, security, packaging, and CI policy.
+/LICENSE @Deathcharge
+/LICENSING.md @Deathcharge
+/NOTICE @Deathcharge
+/TRADEMARKS.md @Deathcharge
+/SECURITY.md @Deathcharge
+/pyproject.toml @Deathcharge
+/.github/ @Deathcharge
