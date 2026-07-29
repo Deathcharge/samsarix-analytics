@@ -1,3 +1,6 @@
+# Copyright 2026 Samsarix LLC
+# SPDX-License-Identifier: MPL-2.0
+
 """Thread-safe, bounded in-process metric instruments."""
 
 from __future__ import annotations
@@ -623,7 +626,7 @@ class MetricRegistry:
         with self._lock:
             instruments = [self._instruments[name] for name in sorted(self._instruments)]
         return {
-            "schema_version": "helix-analytics/v1",
+            "schema_version": "samsarix-analytics/v1",
             "limits": {
                 "max_metrics": self.max_metrics,
                 "max_series_per_metric": self.max_series_per_metric,

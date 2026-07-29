@@ -1,3 +1,6 @@
+# Copyright 2026 Samsarix LLC
+# SPDX-License-Identifier: MPL-2.0
+
 from __future__ import annotations
 
 import json
@@ -6,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from helix_analytics import (
+from samsarix_analytics import (
     CardinalityLimitError,
     Counter,
     Gauge,
@@ -41,7 +44,7 @@ def test_counter_gauge_histogram_snapshot_and_queries() -> None:
     assert registry.query("latency_seconds", "p95")[0].value == pytest.approx(0.77)
 
     snapshot = registry.snapshot()
-    assert snapshot["schema_version"] == "helix-analytics/v1"
+    assert snapshot["schema_version"] == "samsarix-analytics/v1"
     json.dumps(snapshot)
 
 
@@ -182,7 +185,7 @@ def test_gauge_and_histogram_capacity_and_export_branches() -> None:
     assert 'size_bytes_bucket{kind="small",le="+Inf"} 2' in output
     assert "size_bytes_sum" in output
     assert 'temperature{room="a"} 2' in output
-    assert json.loads(registry.to_json(indent=None))["schema_version"] == "helix-analytics/v1"
+    assert json.loads(registry.to_json(indent=None))["schema_version"] == "samsarix-analytics/v1"
     assert MetricRegistry().to_prometheus() == ""
 
 

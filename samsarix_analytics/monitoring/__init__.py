@@ -1,15 +1,20 @@
-"""Bounded in-process metrics and threshold alerting for Python applications."""
+# Copyright 2026 Samsarix LLC
+# SPDX-License-Identifier: MPL-2.0
 
-from .monitoring import (
+"""Public monitoring primitives for :mod:`samsarix_analytics`."""
+
+from .alerting import (
     Alert,
     AlertManager,
     AlertRule,
     AlertSeverity,
     AlertStatus,
-    CardinalityLimitError,
     Comparison,
-    Counter,
     EvaluationResult,
+)
+from .metrics import (
+    CardinalityLimitError,
+    Counter,
     Gauge,
     Histogram,
     MetricError,
@@ -17,8 +22,6 @@ from .monitoring import (
     MetricSample,
     track_duration,
 )
-
-__version__ = "0.2.0"
 
 __all__ = [
     "Alert",
@@ -35,6 +38,5 @@ __all__ = [
     "MetricError",
     "MetricRegistry",
     "MetricSample",
-    "__version__",
     "track_duration",
 ]

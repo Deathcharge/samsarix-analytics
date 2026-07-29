@@ -9,12 +9,12 @@ There is no production service operated by this repository.
 
 Use the repository's **Security** tab to submit a private GitHub security advisory.
 Do not include secrets, personal data, or exploit details in a public issue. If private
-advisories are unavailable, open a public issue containing only a request for a private
-maintainer contact channel.
+advisories are unavailable, email support@samsarix.com. If email is unavailable, open
+a public issue containing only a request for a private maintainer contact channel.
 
 ## Trust model and invariants
 
-`helix-analytics` is embedded in the caller's Python process. Metric definitions and
+`samsarix-analytics` is embedded in the caller's Python process. Metric definitions and
 alert rules are trusted developer configuration; observed numeric values and label
 values may come from untrusted application activity.
 
@@ -31,3 +31,6 @@ The package must:
 
 Applications remain responsible for authorizing access to exported snapshots and for
 avoiding secrets, personal data, and high-cardinality identifiers in labels.
+
+General product questions belong at contact@samsarix.com; security and support requests
+belong at support@samsarix.com.

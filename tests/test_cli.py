@@ -1,17 +1,20 @@
+# Copyright 2026 Samsarix LLC
+# SPDX-License-Identifier: MPL-2.0
+
 from __future__ import annotations
 
 import json
 
 import pytest
 
-from helix_analytics import __version__
-from helix_analytics.cli import main
+from samsarix_analytics import __version__
+from samsarix_analytics.cli import main
 
 
 def test_demo_json(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["demo", "--format", "json"]) == 0
     output = json.loads(capsys.readouterr().out)
-    assert output["schema_version"] == "helix-analytics-demo/v1"
+    assert output["schema_version"] == "samsarix-analytics-demo/v1"
     assert len(output["evaluation"]["triggered"]) == 1
     assert output["evaluation"]["errors"] == {}
 
@@ -25,7 +28,7 @@ def test_demo_prometheus(capsys: pytest.CaptureFixture[str]) -> None:
 
 def test_help_and_version(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([]) == 0
-    assert "usage: helix-analytics" in capsys.readouterr().out
+    assert "usage: samsarix-analytics" in capsys.readouterr().out
     with pytest.raises(SystemExit, match="0"):
         main(["--version"])
     assert __version__ in capsys.readouterr().out

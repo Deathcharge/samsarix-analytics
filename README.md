@@ -1,9 +1,12 @@
-# helix-analytics
+# Samsarix Analytics
 
-`helix-analytics` is a dependency-free Python library for bounded in-process metrics
-and deterministic threshold alerts. It gives small services, workers, CLIs, libraries,
-and test harnesses a deliberate local telemetry layer without requiring a database,
-collector, hosted account, or another Helix repository.
+`samsarix-analytics` is a dependency-free Python library from Samsarix LLC for bounded
+in-process metrics and deterministic threshold alerts. It gives small services,
+workers, CLIs, libraries, and test harnesses a deliberate local telemetry layer without
+requiring a database, collector, hosted account, or another Samsarix repository.
+
+General inquiries: [contact@samsarix.com](mailto:contact@samsarix.com). Support and
+private security reports: [support@samsarix.com](mailto:support@samsarix.com).
 
 The current `0.2.0` line is an alpha release candidate. Its focused metrics/alerting
 journey is implemented and tested; persistence, multiprocess aggregation, and
@@ -28,6 +31,10 @@ OpenTelemetry adapters are intentionally out of scope for this release.
 
 ## Install
 
+The `samsarix-analytics` distribution is not yet published on PyPI. That name returned
+no current PyPI project record when checked on July 28, 2026, but it is not secured
+until Samsarix LLC completes an intentional first publication.
+
 From a checkout:
 
 ```bash
@@ -46,7 +53,7 @@ python -m pip install -r requirements-dev.txt
 ## Five-minute walkthrough
 
 ```python
-from helix_analytics import AlertManager, AlertRule, Comparison, MetricRegistry
+from samsarix_analytics import AlertManager, AlertRule, Comparison, MetricRegistry
 
 registry = MetricRegistry(max_series_per_metric=50)
 jobs = registry.counter("jobs_total", "Jobs processed", ("status",))
@@ -82,11 +89,11 @@ print(registry.to_prometheus())
 The same journey is runnable without writing code:
 
 ```bash
-helix-analytics --version
-helix-analytics demo --format json
-helix-analytics demo --format prometheus
+samsarix-analytics --version
+samsarix-analytics demo --format json
+samsarix-analytics demo --format prometheus
 # Equivalent from a checkout:
-python -m helix_analytics demo --format json
+python -m samsarix_analytics demo --format json
 ```
 
 See [`examples/basic_usage.py`](examples/basic_usage.py) for a complete script.
@@ -136,8 +143,8 @@ use only that bounded recent sample window.
 ```bash
 python -m ruff format --check .
 python -m ruff check .
-python -m mypy helix_analytics
-python -m pytest --cov=helix_analytics --cov-report=term-missing
+python -m mypy samsarix_analytics
+python -m pytest --cov=samsarix_analytics --cov-report=term-missing
 python -m build
 python -m twine check dist/*
 ```
@@ -147,11 +154,11 @@ Python 3.10 through 3.14. Release publication is intentionally manual and owner-
 
 ## Architecture
 
-- `helix_analytics.monitoring.metrics`: registry, instruments, validation, limits,
+- `samsarix_analytics.monitoring.metrics`: registry, instruments, validation, limits,
   snapshots, Prometheus rendering, and duration tracking.
-- `helix_analytics.monitoring.alerting`: rules, lifecycle, cooldown, bounded history,
+- `samsarix_analytics.monitoring.alerting`: rules, lifecycle, cooldown, bounded history,
   and callback dispatch.
-- `helix_analytics.cli`: deterministic installed-package evaluation path.
+- `samsarix_analytics.cli`: deterministic installed-package evaluation path.
 
 The package performs no automatic global registration, I/O, service discovery, or
 environment inspection. Applications own their registry and alert manager explicitly.
@@ -165,16 +172,23 @@ environment inspection. Applications own their registry and alert manager explic
 - There is no OpenTelemetry export adapter yet; use this package as a small local layer,
   not as a replacement for a full distributed telemetry pipeline.
 
+## Standalone design and integrations
+
+Samsarix Analytics deliberately stands on its own. Existing Samsarix repositories can
+consume this public API or add optional adapters, but this package does not import their
+private modules or require them at runtime. Keeping that boundary makes installation,
+testing, versioning, and security review tractable for every repository.
+
 ## Security and support
 
 See [`SECURITY.md`](SECURITY.md) for the trust model and private reporting path. General
-bugs and feature requests belong in [GitHub Issues](https://github.com/Deathcharge/helix-analytics/issues).
+bugs and feature requests belong in [GitHub Issues](https://github.com/Deathcharge/samsarix-analytics/issues).
 Contribution setup and quality expectations are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-## License status
+## License and attribution
 
-The repository contains a modified Business Source License 1.1-style `LICENSE`, not an
-MIT license. Its parameters currently name “Helix Licensing System” instead of
-`helix-analytics`; this is a known owner/legal release gate documented in
-[`docs/PRODUCTIZATION.md`](docs/PRODUCTIZATION.md). No license text was changed during
-productization.
+Source code is licensed under the [Mozilla Public License 2.0](LICENSE). Distributed
+changes to MPL-covered files remain under MPL-2.0, while applications using the library
+may remain under their own terms. See [`LICENSING.md`](LICENSING.md) for the rationale,
+[`NOTICE`](NOTICE) for attribution, and [`TRADEMARKS.md`](TRADEMARKS.md) for Samsarix
+brand-use guidance.

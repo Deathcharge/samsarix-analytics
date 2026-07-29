@@ -1,15 +1,15 @@
-# Contributing to helix-analytics
+# Contributing to Samsarix Analytics
 
 Thanks for improving the project. Keep changes focused on the embedded metrics and
 threshold-alerting product described in the README; hosted services, dashboards,
-databases, authentication, and Helix-private integrations require an evidence-backed
+databases, authentication, and private cross-repository integrations require an evidence-backed
 product decision before implementation.
 
 ## Setup
 
 ```bash
-git clone https://github.com/Deathcharge/helix-analytics.git
-cd helix-analytics
+git clone https://github.com/Deathcharge/samsarix-analytics.git
+cd samsarix-analytics
 python -m venv .venv
 # Linux/macOS: source .venv/bin/activate
 # Windows PowerShell: .venv\Scripts\Activate.ps1
@@ -23,8 +23,8 @@ Run the same checks as CI:
 ```bash
 python -m ruff format --check .
 python -m ruff check .
-python -m mypy helix_analytics
-python -m pytest --cov=helix_analytics --cov-report=term-missing
+python -m mypy samsarix_analytics
+python -m pytest --cov=samsarix_analytics --cov-report=term-missing
 python -m build
 python -m twine check dist/*
 ```
@@ -36,7 +36,7 @@ clear, documented benefit that cannot be achieved safely in the standard library
 
 ## Compatibility and public API
 
-`helix_analytics.__all__` and `helix_analytics.monitoring.__all__` define the supported
+`samsarix_analytics.__all__` and `samsarix_analytics.monitoring.__all__` define the supported
 public API. Treat removals or behavioral incompatibilities as deliberate pre-1.0
 breaking changes and record them in `CHANGELOG.md`.
 
@@ -51,6 +51,10 @@ Describe the user problem, the chosen behavior, and exact verification performed
 Avoid generated dashboards, performance claims, or integrations that cannot be tested
 from this repository. Report security issues privately as described in `SECURITY.md`.
 
-By contributing, you agree that your contribution is distributed under the repository's
-existing license terms. The current license naming mismatch is owner-controlled and
-documented in `docs/PRODUCTIZATION.md`.
+By contributing, you represent that you have the right to submit the work and agree
+that your contribution is distributed under MPL-2.0. Preserve SPDX, copyright,
+license, and attribution notices. Do not add third-party code unless its provenance and
+license compatibility are documented in the pull request.
+
+The source-code license does not grant rights to Samsarix names or logos. See
+`LICENSING.md`, `NOTICE`, and `TRADEMARKS.md` for the complete project policy.

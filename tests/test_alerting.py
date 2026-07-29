@@ -1,10 +1,13 @@
+# Copyright 2026 Samsarix LLC
+# SPDX-License-Identifier: MPL-2.0
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from helix_analytics import (
+from samsarix_analytics import (
     AlertManager,
     AlertRule,
     AlertSeverity,

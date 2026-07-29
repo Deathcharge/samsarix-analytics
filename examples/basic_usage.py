@@ -1,8 +1,11 @@
+# Copyright 2026 Samsarix LLC
+# SPDX-License-Identifier: MPL-2.0
+
 """Copy-pasteable metrics, alerting, and export example."""
 
 import json
 
-from helix_analytics import AlertManager, AlertRule, Comparison, MetricRegistry
+from samsarix_analytics import AlertManager, AlertRule, Comparison, MetricRegistry
 
 registry = MetricRegistry(max_series_per_metric=50)
 jobs = registry.counter("jobs_total", "Jobs processed", ("status",))

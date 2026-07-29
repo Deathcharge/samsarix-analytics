@@ -3,16 +3,20 @@ requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "helix-analytics"
+name = "samsarix-analytics"
 version = "0.2.0"
 description = "Bounded in-process metrics and threshold alerting for Python applications"
 readme = "README.md"
 requires-python = ">=3.10"
-license = "LicenseRef-Helix-Modified-BSL-1.1"
-license-files = ["LICENSE"]
+license = "MPL-2.0"
+license-files = ["LICENSE", "NOTICE", "TRADEMARKS.md"]
 authors = [
-    {name = "Helix Collective", email = "collective@helix.ai"}
+    {name = "Samsarix LLC", email = "contact@samsarix.com"}
 ]
+maintainers = [
+    {name = "Samsarix Support", email = "support@samsarix.com"}
+]
+keywords = ["alerting", "metrics", "monitoring", "prometheus", "samsarix", "telemetry"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -38,18 +42,21 @@ dev = [
 ]
 
 [project.scripts]
-helix-analytics = "helix_analytics.cli:main"
+samsarix-analytics = "samsarix_analytics.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/Deathcharge/helix-analytics"
-Repository = "https://github.com/Deathcharge/helix-analytics.git"
-Issues = "https://github.com/Deathcharge/helix-analytics/issues"
+Homepage = "https://www.samsarix.com"
+Repository = "https://github.com/Deathcharge/samsarix-analytics"
+Issues = "https://github.com/Deathcharge/samsarix-analytics/issues"
+Changelog = "https://github.com/Deathcharge/samsarix-analytics/blob/main/CHANGELOG.md"
+Licensing = "https://github.com/Deathcharge/samsarix-analytics/blob/main/LICENSING.md"
+Support = "https://github.com/Deathcharge/samsarix-analytics/issues"
 
 [tool.setuptools.packages.find]
-include = ["helix_analytics*"]
+include = ["samsarix_analytics*"]
 
 [tool.setuptools.package-data]
-helix_analytics = ["py.typed"]
+samsarix_analytics = ["py.typed"]
 
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers"
@@ -57,7 +64,7 @@ testpaths = ["tests"]
 
 [tool.coverage.run]
 branch = true
-source = ["helix_analytics"]
+source = ["samsarix_analytics"]
 
 [tool.coverage.report]
 fail_under = 90

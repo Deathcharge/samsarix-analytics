@@ -1,4 +1,7 @@
-"""Deterministic threshold alerts over a :mod:`helix_analytics` metric registry."""
+# Copyright 2026 Samsarix LLC
+# SPDX-License-Identifier: MPL-2.0
+
+"""Deterministic threshold alerts over a :mod:`samsarix_analytics` metric registry."""
 
 from __future__ import annotations
 

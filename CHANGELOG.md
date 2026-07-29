@@ -13,6 +13,7 @@ the public API remains pre-1.0.
   acknowledgement, auto-resolution, bounded history, and callback isolation.
 - Deterministic CLI demo, runnable example, tests, CI, security guidance, and
   productization record.
+- MPL-2.0 licensing, Samsarix LLC attribution, and explicit trademark guidance.
 
 ### Changed
 
@@ -20,7 +21,13 @@ the public API remains pre-1.0.
 - Consolidated package configuration in `pyproject.toml` and raised the actual minimum
   Python version to 3.10.
 - Corrected package metadata and documentation to reference the existing
-  source-available license rather than MIT.
+  project license rather than MIT.
+- Renamed the unreleased distribution, import package, CLI, and export schema from
+  `helix-analytics` / `helix_analytics` to `samsarix-analytics` /
+  `samsarix_analytics` before the first functional release.
+- Replaced the mismatched customized BSL terms with standard MPL-2.0 file-level
+  copyleft so distributed changes to covered source files remain available while
+  larger applications can use the library under their own terms.
 
 ### Removed
 

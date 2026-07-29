@@ -1,6 +1,6 @@
 # Productization record
 
-This document is the living release record for `helix-analytics`. It distinguishes
+This document is the living release record for `samsarix-analytics`. It distinguishes
 implemented behavior from inherited claims and owner-controlled work.
 
 ## Repository assessment
@@ -28,7 +28,7 @@ agent monitor, or replacement for OpenTelemetry.
   expose Prometheus-compatible text.
 - Independent reason to exist: a dependency-free local store is useful before or
   without adopting an OpenTelemetry SDK, collector, Prometheus client runtime, or
-  Helix service.
+  Samsarix service.
 
 ## Product and architecture decisions
 
@@ -52,6 +52,14 @@ agent monitor, or replacement for OpenTelemetry.
   syntax. The CI target is Python 3.10 through 3.14.
 - `pyproject.toml` is the single packaging source of truth; the duplicate `setup.py`
   was removed.
+- The first functional release uses the Samsarix Analytics product name, the
+  `samsarix-analytics` distribution, the `samsarix_analytics` import package, and the
+  `samsarix-analytics` CLI. No functional `helix-analytics` package was published, and
+  a local portfolio search found no active source consumer of the old namespace.
+- MPL-2.0 provides standard file-level copyleft, contributor patent grants, and notice
+  preservation without forcing independent files in larger applications under the
+  same license. `NOTICE` credits Samsarix LLC and `TRADEMARKS.md` keeps brand rights
+  separate from source-code rights.
 
 ## Assumptions
 
@@ -60,9 +68,9 @@ agent monitor, or replacement for OpenTelemetry.
   real consumer evidence rather than preserving nonfunctional source paths.
 - Metric definitions are developer-controlled. Metric label values and observations
   may be influenced by application users and are therefore validated and bounded.
-- `LICENSE` expresses owner intent even though its `Licensed Work` parameter names
-  “Helix Licensing System” rather than this repository. That mismatch requires owner
-  or legal review and is not silently rewritten here.
+- Samsarix LLC has authority to relicense the carried-over repository history. Before
+  public release, the company should retain written chain-of-title records supporting
+  that assumption and obtain legal review if ownership is not already documented.
 
 ## Baseline results (revision `4f1fdfb`)
 
@@ -74,9 +82,9 @@ agent monitor, or replacement for OpenTelemetry.
 | clean-venv `python -m pip install -r requirements.txt` | Failed: pinned `anthropic==0.7.10` unavailable. |
 | `python -m pytest tests/ -v --cov=src` | Failed: `tests/` did not exist. |
 | `python -m pytest -q` | Failed: no tests collected. |
-| `python -m black --check helix_analytics` | Failed: 10 files required formatting. |
-| `python -m flake8 helix_analytics` | Failed with hundreds of style violations. |
-| `python -m mypy helix_analytics` | Failed with 30 errors in 7 files. |
+| legacy `python -m black --check helix_analytics` | Failed: 10 files required formatting. |
+| legacy `python -m flake8 helix_analytics` | Failed with hundreds of style violations. |
+| legacy `python -m mypy helix_analytics` | Failed with 30 errors in 7 files. |
 | `python -m build` | Exited 0, but the wheel contained only five metadata files and no importable package. |
 
 ## Prioritized findings
@@ -96,8 +104,8 @@ agent monitor, or replacement for OpenTelemetry.
 - [x] Bound all memory-amplification paths and validate metric/label input.
 - [x] Correct threshold rule evaluation, cooldown, resolution, and handler isolation.
 - [x] Add type checking, linting, coverage, wheel-content verification, and CI.
-- [x] Correct package metadata to reference the existing source-available license rather
-  than MIT.
+- [x] Replace contradictory MIT/BSL claims with standard MPL-2.0 metadata, attribution,
+  and trademark policy.
 
 ### P2
 
@@ -145,21 +153,26 @@ agent monitor, or replacement for OpenTelemetry.
   deterministic export, a CLI demo, and a source example.
 - A 36-test suite with branch coverage above the 90% release gate, strict type and lint
   checks, distribution-content checks, and a Python 3.10-3.14 CI workflow.
+- A complete Samsarix LLC rebrand across distribution, import package, CLI, schema,
+  metadata, contacts, documentation, and repository URLs before first publication.
+- Standard MPL-2.0 licensing with SPDX source notices, Samsarix attribution, and a
+  separate trademark policy.
 
 ## Release disposition
 
 The engineering result is a release candidate: the local acceptance criteria pass and
-there is no known core-path P0. Public publication remains blocked on owner/legal
-confirmation of the repository-specific modified BSL parameters and on owner-controlled
-PyPI credentials and name ownership. Until those gates are closed, do not describe the
-package as generally available or production-deployed.
+there is no known core-path P0. Public publication remains owner-controlled and requires
+a green remote CI run, PyPI credentials and name ownership, and confirmation that
+Samsarix LLC's chain of title is documented. Until those gates are closed, do not
+describe the package as generally available or production-deployed.
 
 ## Deferred and externally blocked work
 
-- Owner/legal: confirm that the modified BSL text applies to `helix-analytics`, correct
-  the `Licensed Work` name, and confirm the production-use threshold and pricing URL.
-- Owner/release: confirm PyPI name ownership, publication credentials, release tag, and
-  whether publishing a source-available package to PyPI is desired.
+- Owner/legal: retain written evidence that Samsarix LLC owns or has authority to
+  relicense the earlier Helix-branded repository contributions; consider counsel review
+  and trademark registration as the product grows.
+- Owner/release: claim the currently unused `samsarix-analytics` PyPI name through an
+  intentional first release, configure trusted publishing, and create the release tag.
 - Production deployment is not applicable to the core library. No package publication,
   live infrastructure, credentials, or external accounts are created by this work.
 
@@ -178,7 +191,7 @@ package as generally available or production-deployed.
 
 The simplest distribution is a pure-Python wheel and sdist built from
 `pyproject.toml`. There is no hosted operating cost: the library performs no network
-requests and stores data only in the host process. A plausible sustainability model is
-owner-supported source-available distribution plus paid support or commercial license
-terms, subject to resolving the current license wording. Hosted subscriptions are out
-of scope and would add cost and operational obligations unsupported by this code.
+requests and stores data only in the host process. MPL-2.0 permits commercial use, so a
+plausible sustainability model is open-source distribution plus paid support,
+integration work, or separately licensed add-ons. Hosted subscriptions are out of
+scope and would add cost and operational obligations unsupported by this code.

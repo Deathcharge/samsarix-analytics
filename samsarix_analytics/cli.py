@@ -1,4 +1,7 @@
-"""Command-line evaluation path for helix-analytics."""
+# Copyright 2026 Samsarix LLC
+# SPDX-License-Identifier: MPL-2.0
+
+"""Command-line evaluation path for samsarix-analytics."""
 
 from __future__ import annotations
 
@@ -45,7 +48,7 @@ def build_demo() -> tuple[MetricRegistry, AlertManager, dict[str, object]]:
     )
     evaluation = alerts.evaluate(registry)
     output: dict[str, object] = {
-        "schema_version": "helix-analytics-demo/v1",
+        "schema_version": "samsarix-analytics-demo/v1",
         "metrics": registry.snapshot(),
         "alerts": alerts.snapshot(),
         "evaluation": evaluation.to_dict(),
@@ -55,8 +58,8 @@ def build_demo() -> tuple[MetricRegistry, AlertManager, dict[str, object]]:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="helix-analytics",
-        description="Inspect a deterministic helix-analytics metrics and alerting demo.",
+        prog="samsarix-analytics",
+        description="Inspect a deterministic Samsarix Analytics metrics and alerting demo.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command")
