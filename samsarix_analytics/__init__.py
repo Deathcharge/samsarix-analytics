@@ -3,6 +3,16 @@
 
 """Bounded in-process metrics and threshold alerting for Python applications."""
 
+from .checkpoint import (
+    CHECKPOINT_SCHEMA_VERSION,
+    CheckpointError,
+    CheckpointInfo,
+    CheckpointPolicy,
+    decode_checkpoint,
+    encode_checkpoint,
+    load_checkpoint,
+    save_checkpoint,
+)
 from .exposition import (
     PROMETHEUS_CONTENT_TYPE,
     ASGIApp,
@@ -30,9 +40,10 @@ from .monitoring import (
     track_duration,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
+    "CHECKPOINT_SCHEMA_VERSION",
     "PROMETHEUS_CONTENT_TYPE",
     "ASGIApp",
     "Alert",
@@ -41,6 +52,9 @@ __all__ = [
     "AlertSeverity",
     "AlertStatus",
     "CardinalityLimitError",
+    "CheckpointError",
+    "CheckpointInfo",
+    "CheckpointPolicy",
     "Comparison",
     "Counter",
     "EvaluationResult",
@@ -52,8 +66,12 @@ __all__ = [
     "MetricsServer",
     "WSGIApp",
     "__version__",
+    "decode_checkpoint",
+    "encode_checkpoint",
+    "load_checkpoint",
     "make_asgi_app",
     "make_wsgi_app",
+    "save_checkpoint",
     "start_metrics_server",
     "track_duration",
 ]

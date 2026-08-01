@@ -15,9 +15,9 @@ exist or contradicted `LICENSE`.
 
 The defensible product is a small embedded Python library for developers who need to
 record bounded in-process counters, gauges, and histograms, evaluate deterministic
-threshold alerts, and export JSON or Prometheus text without operating another
-service. It is intentionally not a hosted observability platform, dashboard, database,
-agent monitor, or replacement for OpenTelemetry.
+threshold alerts, expose Prometheus text, and explicitly checkpoint local state without
+operating another service. It is intentionally not a hosted observability platform,
+dashboard, database, agent monitor, or replacement for OpenTelemetry.
 
 ## Target user and primary use case
 
@@ -25,7 +25,7 @@ agent monitor, or replacement for OpenTelemetry.
   for a process, test harness, CLI, worker, or small service.
 - Primary journey: install the package, define labeled metrics with explicit memory
   limits, record values, evaluate a threshold rule, then serialize a JSON snapshot or
-  expose Prometheus-compatible text.
+  expose Prometheus-compatible text and optionally resume registry state after restart.
 - Independent reason to exist: a dependency-free local store is useful before or
   without adopting an OpenTelemetry SDK, collector, Prometheus client runtime, or
   Samsarix service.
@@ -38,10 +38,13 @@ agent monitor, or replacement for OpenTelemetry.
   decrease.
 - Series cardinality, histogram sample retention, label length, metric count, and
   alert history are bounded to prevent accidental process-memory amplification.
-- JSON and Prometheus export are local, synchronous operations with no network,
-  telemetry, credentials, or automatic background threads.
+- JSON and Prometheus rendering are local and synchronous. HTTP serving and checkpoint
+  I/O occur only through explicit adapters selected by the application.
 - Prometheus export escapes untrusted label values and help text. High-cardinality
   identifiers and personal data are documented as unsafe label choices.
+- Official Prometheus WSGI/ASGI patterns and exposition requirements make HTTP adapters
+  the smallest useful interoperability layer. The standalone helper defaults to
+  loopback and does not pretend to provide TLS or multiprocess aggregation.
 - OpenTelemetry metrics for Python are stable, so an OTel adapter is a plausible P2
   extension. It is deliberately not a core dependency because the first release is a
   lightweight embedded store.
@@ -110,8 +113,8 @@ agent monitor, or replacement for OpenTelemetry.
 ### P2
 
 - [ ] Optional OpenTelemetry adapter.
-- [ ] Optional ASGI/WSGI endpoint helpers for Prometheus output.
-- [ ] Persistence adapter for process restarts.
+- [x] Optional ASGI/WSGI endpoint helpers for Prometheus output.
+- [x] Explicit bounded registry checkpoints for process restarts.
 - [ ] Multiprocess metric aggregation.
 
 ## Implementation checklist
@@ -121,6 +124,7 @@ agent monitor, or replacement for OpenTelemetry.
 - [x] Deterministic JSON and Prometheus export.
 - [x] Threshold alerting with cooldown and auto-resolution.
 - [x] Runnable CLI demo and source example.
+- [x] Scrapeable HTTP and restartable checkpoint examples.
 - [x] Unit, integration, CLI, and installed-wheel tests.
 - [x] CI across supported Python versions.
 - [x] Accurate README, contribution, security, and changelog documents.
@@ -133,6 +137,8 @@ agent monitor, or replacement for OpenTelemetry.
 - JSON output is serializable and Prometheus text follows the supported exposition
   subset, including label escaping.
 - Metric and alert storage cannot grow beyond configured limits.
+- Checkpoint bytes and restored definitions cannot exceed load policy limits.
+- WSGI, ASGI, and loopback server behavior match the documented HTTP contract.
 - Invalid metric names, labels, values, thresholds, and counter decrements fail clearly.
 - Lint, format check, strict type check, tests with at least 90% branch coverage, build,
   wheel inspection, and metadata validation pass.
@@ -157,6 +163,9 @@ agent monitor, or replacement for OpenTelemetry.
   metadata, contacts, documentation, and repository URLs before first publication.
 - Standard MPL-2.0 licensing with SPDX source notices, Samsarix attribution, and a
   separate trademark policy.
+- Current-alternative research and a documented local-first product wedge.
+- Dependency-free WSGI/ASGI exposition, an explicit loopback server, deterministic
+  atomic registry checkpoints, and CLI checkpoint inspection for `0.3.0`.
 
 ## Release disposition
 
@@ -180,8 +189,8 @@ describe the package as generally available or production-deployed.
 
 - This is a pre-1.0 API rebuilt from an unpublished/nonfunctional package shape; users
   evaluating source imports from the old tree will need to migrate.
-- In-process metrics disappear on restart and are not suitable for multiprocess
-  aggregation.
+- In-process metrics disappear on restart unless applications explicitly checkpoint
+  them; checkpoints are not cross-instrument transactions or multiprocess aggregation.
 - Percentiles are calculated over a configured bounded recent sample window, not an
   all-time streaming quantile sketch.
 - Prometheus labels can expose sensitive data or create costly cardinality when chosen
