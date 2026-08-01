@@ -23,10 +23,24 @@ Current disposition: Merge the productization branch after exact-head verificati
 
 Current hardening backlog:
 
-- No persistence, multiprocess aggregation, network endpoint helper, or OpenTelemetry adapter.
-- No real application consumer or performance/soak evidence.
+- Prometheus WSGI/ASGI and loopback endpoint helpers are implemented for `0.3.0`.
+- Explicit bounded registry checkpoints are implemented for restartable local jobs.
+- No multiprocess aggregation, alert-manager checkpoint, or OpenTelemetry adapter.
+- A reproducible core benchmark exists; a real external application consumer and
+  multi-hour soak evidence are still missing.
 - Percentiles use a bounded recent window and can be misunderstood as global quantiles.
 - Publishing, API compatibility policy, and Samsarix LLC chain-of-title confirmation remain owner/legal gates.
+
+## Competitive `0.3.0` slice
+
+- [x] Document the product wedge against current Prometheus and OpenTelemetry guidance.
+- [x] Add exact-path WSGI and ASGI Prometheus applications.
+- [x] Add an explicitly managed, loopback-by-default standalone server.
+- [x] Add privacy-conscious WSGI/ASGI request lifecycle instrumentation.
+- [x] Add deterministic, atomic, bounded registry checkpoints and CLI inspection.
+- [x] Add scrapeable and restartable-worker examples.
+- [x] Add reproducible recording, rendering, checkpoint, and retention benchmarks.
+- [ ] Prove the release slice from a clean built wheel and the remote CI matrix.
 
 ## Samsarix adoption
 

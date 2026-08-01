@@ -7,9 +7,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections.abc import Sequence
+from pathlib import Path
 
 from . import __version__
+from .checkpoint import CheckpointError, CheckpointPolicy, load_checkpoint
 from .monitoring import AlertManager, AlertRule, AlertSeverity, Comparison, MetricRegistry
 
 
@@ -70,6 +73,22 @@ def _parser() -> argparse.ArgumentParser:
         default="json",
         help="output format (default: json)",
     )
+    inspect = subparsers.add_parser(
+        "inspect", help="validate and render a saved registry checkpoint"
+    )
+    inspect.add_argument("path", type=Path, help="checkpoint JSON file")
+    inspect.add_argument(
+        "--format",
+        choices=("json", "prometheus"),
+        default="json",
+        help="output format (default: json)",
+    )
+    inspect.add_argument(
+        "--max-bytes",
+        type=int,
+        default=10 * 1024 * 1024,
+        help="maximum checkpoint size accepted (default: 10485760)",
+    )
     return parser
 
 
@@ -78,6 +97,21 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser = _parser()
     args = parser.parse_args(argv)
+    if args.command == "inspect":
+        try:
+            registry = load_checkpoint(
+                args.path,
+                policy=CheckpointPolicy(max_file_bytes=args.max_bytes),
+            )
+        except (CheckpointError, OSError, ValueError) as exc:
+            print(f"samsarix-analytics: {exc}", file=sys.stderr)
+            return 2
+        if args.format == "prometheus":
+            print(registry.to_prometheus(), end="")
+        else:
+            print(registry.to_json())
+        return 0
+
     if args.command != "demo":
         parser.print_help()
         return 0

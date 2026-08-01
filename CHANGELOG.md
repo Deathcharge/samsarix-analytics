@@ -3,7 +3,30 @@
 All notable changes are documented here. The project follows Semantic Versioning while
 the public API remains pre-1.0.
 
-## 0.2.0 - Unreleased
+## 0.3.0 - Unreleased
+
+### Added
+
+- Dependency-free WSGI and ASGI Prometheus endpoint factories.
+- Explicit loopback-by-default standalone metrics server with deterministic shutdown.
+- Optional bearer-token protection and strict HTTP method/path behavior.
+- Framework-neutral WSGI/ASGI request middleware with bounded method/status-class
+  labels and isolated recording failures.
+- Deterministic JSON registry checkpoints with bounded decoding, strict restoration,
+  atomic replacement, and SHA-256 integrity metadata.
+- CLI checkpoint inspection plus scrapeable-server and restartable-worker examples.
+- Evidence-backed competitive positioning and `0.3.0` acceptance criteria.
+- Reproducible recording, rendering, checkpoint, and retention benchmark.
+- Hardened bearer-token validation, regular-file checkpoint loading, and restored
+  histogram consistency checks.
+- Added a default 10 MiB byte budget to Prometheus HTTP rendering.
+
+### Changed
+
+- Expanded the product wedge from local metric collection to a small embedded
+  observability control loop that interoperates with existing Prometheus deployments.
+
+## 0.2.0 - Unpublished productization baseline
 
 ### Added
 

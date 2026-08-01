@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-The unreleased `0.2.x` line is the only version currently receiving security fixes.
+The unreleased `0.3.x` line is the only version currently receiving security fixes.
 There is no production service operated by this repository.
 
 ## Reporting a vulnerability
@@ -27,10 +27,27 @@ The package must:
   alert rules, handlers, and history;
 - isolate alert callback failures;
 - perform no implicit network, file, credential, or environment access;
+- bind the opt-in standalone metrics server to loopback by default;
+- cap HTTP exposition by encoded response bytes before the complete registry is rendered;
+- compare optional bearer credentials without data-dependent string comparison;
+- normalize HTTP instrumentation to a fixed method/status-class label space and never
+  capture raw paths, queries, headers, bodies, or client addresses;
+- isolate instrumentation recording failures from the wrapped application;
+- reject oversized, malformed, duplicate-keyed, non-finite, or internally inconsistent
+  checkpoint data before it becomes live metric state;
+- write checkpoints through private, flushed, same-directory temporary files followed
+  by atomic replacement;
+- reject directories, devices, pipes, and other non-regular checkpoint inputs;
 - avoid logging metric label values or other application data by default.
 
-Applications remain responsible for authorizing access to exported snapshots and for
-avoiding secrets, personal data, and high-cardinality identifiers in labels.
+Applications remain responsible for authorizing access to exported snapshots and HTTP
+endpoints and for avoiding secrets, personal data, and high-cardinality identifiers in
+labels. The standalone server is intended for loopback or trusted private networks; use
+a TLS-capable application server or reverse proxy when metrics cross a trust boundary.
+Checkpoint files can contain the same application labels and values as exported
+metrics. Keep them out of web roots and source control, restrict filesystem access, and
+choose a smaller `CheckpointPolicy` when accepting state from outside the process's
+trust boundary.
 
 General product questions belong at contact@samsarix.com; security and support requests
 belong at support@samsarix.com.

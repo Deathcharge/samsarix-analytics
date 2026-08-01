@@ -12,6 +12,7 @@ from collections import deque
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from itertools import pairwise
 from threading import RLock
 from time import perf_counter
 from typing import Final
@@ -21,6 +22,7 @@ _LABEL_NAME: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 _HISTOGRAM_AGGREGATIONS: Final = frozenset(
     {"count", "sum", "avg", "min", "max", "p50", "p90", "p95", "p99"}
 )
+_MAX_CHECKPOINT_HISTOGRAM_COUNT: Final = 2**63 - 1
 
 
 class MetricError(ValueError):
@@ -172,6 +174,19 @@ class _Instrument:
     def prometheus_lines(self) -> list[str]:
         raise NotImplementedError
 
+    def _checkpoint_state(self) -> dict[str, object]:
+        raise NotImplementedError
+
+    def _checkpoint_definition(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "type": self.kind,
+            "description": self.description,
+            "label_names": list(self.label_names),
+            "max_series": self.max_series,
+            "max_label_value_length": self.max_label_value_length,
+        }
+
 
 class Counter(_Instrument):
     """A monotonically increasing labeled counter."""
@@ -250,6 +265,14 @@ class Counter(_Instrument):
             f"# TYPE {self.name} counter",
             *samples,
         ]
+
+    def _checkpoint_state(self) -> dict[str, object]:
+        with self._lock:
+            series = [
+                {"labels": self._labels(key), "value": value}
+                for key, value in sorted(self._values.items())
+            ]
+        return {**self._checkpoint_definition(), "series": series}
 
 
 class Gauge(_Instrument):
@@ -340,6 +363,14 @@ class Gauge(_Instrument):
             f"# TYPE {self.name} gauge",
             *samples,
         ]
+
+    def _checkpoint_state(self) -> dict[str, object]:
+        with self._lock:
+            series = [
+                {"labels": self._labels(key), "value": value}
+                for key, value in sorted(self._values.items())
+            ]
+        return {**self._checkpoint_definition(), "series": series}
 
 
 class Histogram(_Instrument):
@@ -503,6 +534,124 @@ class Histogram(_Instrument):
             *samples,
         ]
 
+    def _checkpoint_state(self) -> dict[str, object]:
+        with self._lock:
+            series = [
+                {
+                    "labels": self._labels(key),
+                    "count": value.count,
+                    "sum": value.total,
+                    "min": value.minimum,
+                    "max": value.maximum,
+                    "bucket_counts": list(value.bucket_counts),
+                    "recent": list(value.recent),
+                }
+                for key, value in sorted(self._series.items())
+            ]
+        return {
+            **self._checkpoint_definition(),
+            "buckets": list(self.buckets),
+            "max_samples": self.max_samples,
+            "series": series,
+        }
+
+    def _restore_checkpoint_series(
+        self,
+        *,
+        labels: Mapping[str, object],
+        count: int,
+        total: float,
+        minimum: float,
+        maximum: float,
+        bucket_counts: Sequence[int],
+        recent: Sequence[float],
+    ) -> None:
+        """Restore one already-validated series without replaying old observations."""
+
+        if (
+            isinstance(count, bool)
+            or not isinstance(count, int)
+            or not 1 <= count <= _MAX_CHECKPOINT_HISTOGRAM_COUNT
+        ):
+            raise MetricError("checkpoint histogram count must be a positive signed 64-bit integer")
+        normalized_total = _finite_number(total, field_name="checkpoint histogram sum")
+        normalized_minimum = _finite_number(minimum, field_name="checkpoint histogram min")
+        normalized_maximum = _finite_number(maximum, field_name="checkpoint histogram max")
+        if normalized_minimum > normalized_maximum:
+            raise MetricError("checkpoint histogram min cannot exceed max")
+        average = normalized_total / count
+        if not (
+            normalized_minimum <= average <= normalized_maximum
+            or math.isclose(average, normalized_minimum, rel_tol=1e-12, abs_tol=1e-15)
+            or math.isclose(average, normalized_maximum, rel_tol=1e-12, abs_tol=1e-15)
+        ):
+            raise MetricError("checkpoint histogram mean must be within min and max")
+        normalized_counts = tuple(bucket_counts)
+        if len(normalized_counts) != len(self.buckets):
+            raise MetricError("checkpoint histogram bucket count length does not match definition")
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > count
+            for value in normalized_counts
+        ):
+            raise MetricError("checkpoint histogram bucket counts must be integers within count")
+        if any(left > right for left, right in pairwise(normalized_counts)):
+            raise MetricError("checkpoint histogram bucket counts must be cumulative")
+
+        normalized_recent = tuple(
+            _finite_number(value, field_name="checkpoint histogram recent value")
+            for value in recent
+        )
+        expected_recent = min(count, self.max_samples)
+        if len(normalized_recent) != expected_recent:
+            raise MetricError(
+                f"checkpoint histogram must contain exactly {expected_recent} recent values"
+            )
+        if any(
+            value < normalized_minimum or value > normalized_maximum for value in normalized_recent
+        ):
+            raise MetricError("checkpoint histogram recent values must be within min and max")
+        for upper_bound, bucket_count in zip(self.buckets, normalized_counts, strict=True):
+            recent_count = sum(value <= upper_bound for value in normalized_recent)
+            if bucket_count < recent_count:
+                raise MetricError(
+                    "checkpoint histogram bucket count cannot be smaller than recent observations"
+                )
+            if upper_bound < normalized_minimum and bucket_count != 0:
+                raise MetricError("checkpoint histogram bucket below min must be empty")
+            if upper_bound >= normalized_maximum and bucket_count != count:
+                raise MetricError("checkpoint histogram bucket at or above max must contain count")
+        if count == len(normalized_recent):
+            if not math.isclose(sum(normalized_recent), normalized_total, rel_tol=1e-12):
+                raise MetricError("checkpoint histogram sum does not match its observations")
+            if (
+                min(normalized_recent) != normalized_minimum
+                or max(normalized_recent) != normalized_maximum
+            ):
+                raise MetricError("checkpoint histogram min or max does not match its observations")
+            expected_counts = tuple(
+                sum(observation <= upper_bound for observation in normalized_recent)
+                for upper_bound in self.buckets
+            )
+            if normalized_counts != expected_counts:
+                raise MetricError("checkpoint histogram buckets do not match its observations")
+
+        key = self._key(labels)
+        with self._lock:
+            if key in self._series:
+                raise MetricError(f"checkpoint contains duplicate series for metric {self.name!r}")
+            if len(self._series) >= self.max_series:
+                raise CardinalityLimitError(
+                    f"metric {self.name!r} reached its {self.max_series}-series limit"
+                )
+            self._series[key] = _HistogramSeries(
+                count=count,
+                total=normalized_total,
+                minimum=normalized_minimum,
+                maximum=normalized_maximum,
+                bucket_counts=list(normalized_counts),
+                recent=deque(normalized_recent, maxlen=self.max_samples),
+            )
+
 
 Instrument = Counter | Gauge | Histogram
 
@@ -639,11 +788,38 @@ class MetricRegistry:
     def to_json(self, *, indent: int | None = 2) -> str:
         return json.dumps(self.snapshot(), indent=indent, sort_keys=True)
 
-    def to_prometheus(self) -> str:
+    def to_prometheus(self, *, max_bytes: int | None = None) -> str:
+        if max_bytes is not None and (
+            isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1
+        ):
+            raise MetricError("max_bytes must be a positive integer or None")
         with self._lock:
             instruments = [self._instruments[name] for name in sorted(self._instruments)]
-        lines = [line for instrument in instruments for line in instrument.prometheus_lines()]
+        lines: list[str] = []
+        encoded_size = 0
+        for instrument in instruments:
+            for line in instrument.prometheus_lines():
+                encoded_size += len(line.encode("utf-8")) + 1
+                if max_bytes is not None and encoded_size > max_bytes:
+                    raise MetricError(f"Prometheus output exceeds max_bytes={max_bytes}")
+                lines.append(line)
         return "\n".join(lines) + ("\n" if lines else "")
+
+    def _checkpoint_state(self) -> dict[str, object]:
+        """Return the versioned internal state used by explicit checkpoint helpers."""
+
+        with self._lock:
+            instruments = [self._instruments[name] for name in sorted(self._instruments)]
+        return {
+            "schema_version": "samsarix-analytics-checkpoint/v1",
+            "limits": {
+                "max_metrics": self.max_metrics,
+                "max_series_per_metric": self.max_series_per_metric,
+                "max_histogram_samples": self.max_histogram_samples,
+                "max_label_value_length": self.max_label_value_length,
+            },
+            "metrics": [instrument._checkpoint_state() for instrument in instruments],
+        }
 
 
 @contextmanager
