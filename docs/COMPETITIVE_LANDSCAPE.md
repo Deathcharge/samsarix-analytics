@@ -47,7 +47,8 @@ Sources:
    evaluate local alerts, and explicitly checkpoint state when there is no always-on
    metrics backend.
 2. **Small private services.** Mount a WSGI/ASGI scrape endpoint or use the loopback
-   server without adding a framework or runtime dependency.
+   server without adding a framework or runtime dependency. Wrap the application with
+   bounded request metrics without exposing raw route or user-controlled path labels.
 3. **Test and reliability harnesses.** Assert deterministic metric snapshots and alert
    transitions without a global registry, background exporter, or external service.
 4. **Dependency-sensitive libraries and CLIs.** Accept an application-owned registry
@@ -62,6 +63,8 @@ Sources:
   tests.
 - HTTP adapters use exact paths, bounded rendered state, no-cache responses, optional
   constant-time bearer checks, and loopback as the standalone default.
+- Framework-neutral middleware covers request counts, duration, and concurrency while
+  normalizing method/status labels and isolating telemetry failures from the host app.
 - Checkpoints are deterministic JSON rather than pickle, reject duplicate keys and
   malformed invariants, apply load-time resource policies, and replace files atomically.
 
@@ -86,5 +89,7 @@ Sources:
   integrity digest.
 - A new user can run a scrapeable example, a restartable-worker example, and inspect a
   saved checkpoint from the CLI.
+- WSGI and ASGI wrappers record successful, failed, and streamed requests without
+  changing application return values or exception behavior.
 - Formatting, lint, strict typing, branch coverage, clean wheel installation, artifact
   inspection, and the Python 3.10-3.14 CI matrix pass.

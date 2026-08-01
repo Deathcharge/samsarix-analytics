@@ -22,6 +22,7 @@ from .exposition import (
     make_wsgi_app,
     start_metrics_server,
 )
+from .instrumentation import HTTPMetrics, instrument_asgi, instrument_wsgi
 from .monitoring import (
     Alert,
     AlertManager,
@@ -59,6 +60,7 @@ __all__ = [
     "Counter",
     "EvaluationResult",
     "Gauge",
+    "HTTPMetrics",
     "Histogram",
     "MetricError",
     "MetricRegistry",
@@ -68,6 +70,8 @@ __all__ = [
     "__version__",
     "decode_checkpoint",
     "encode_checkpoint",
+    "instrument_asgi",
+    "instrument_wsgi",
     "load_checkpoint",
     "make_asgi_app",
     "make_wsgi_app",

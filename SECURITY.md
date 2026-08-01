@@ -29,6 +29,9 @@ The package must:
 - perform no implicit network, file, credential, or environment access;
 - bind the opt-in standalone metrics server to loopback by default;
 - compare optional bearer credentials without data-dependent string comparison;
+- normalize HTTP instrumentation to a fixed method/status-class label space and never
+  capture raw paths, queries, headers, bodies, or client addresses;
+- isolate instrumentation recording failures from the wrapped application;
 - reject oversized, malformed, duplicate-keyed, non-finite, or internally inconsistent
   checkpoint data before it becomes live metric state;
 - write checkpoints through private, flushed, same-directory temporary files followed

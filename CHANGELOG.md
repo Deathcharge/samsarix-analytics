@@ -10,10 +10,13 @@ the public API remains pre-1.0.
 - Dependency-free WSGI and ASGI Prometheus endpoint factories.
 - Explicit loopback-by-default standalone metrics server with deterministic shutdown.
 - Optional bearer-token protection and strict HTTP method/path behavior.
+- Framework-neutral WSGI/ASGI request middleware with bounded method/status-class
+  labels and isolated recording failures.
 - Deterministic JSON registry checkpoints with bounded decoding, strict restoration,
   atomic replacement, and SHA-256 integrity metadata.
 - CLI checkpoint inspection plus scrapeable-server and restartable-worker examples.
 - Evidence-backed competitive positioning and `0.3.0` acceptance criteria.
+- Reproducible recording, rendering, checkpoint, and retention benchmark.
 
 ### Changed
 

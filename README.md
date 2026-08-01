@@ -20,6 +20,7 @@ aggregation and OpenTelemetry adapters remain out of scope for this release.
 - strict validation for definitions, labels, and finite observations;
 - JSON snapshots and Prometheus-compatible text export;
 - WSGI, ASGI, and loopback-by-default Prometheus HTTP exposition;
+- framework-neutral WSGI/ASGI request metrics without raw-path labels;
 - threshold rules over values or histogram aggregates (`avg`, `p95`, and others);
 - alert deduplication, cooldown, acknowledgement, auto-resolution, and isolated
   notification callbacks;
@@ -130,6 +131,23 @@ scrapeable 15-second demo. Endpoint
 factories support an optional bearer token, exact path matching, `GET`, `HEAD`, and
 `OPTIONS`, and the Prometheus `text/plain; version=0.0.4` content type.
 
+Instrument an existing application without framework-specific dependencies:
+
+```python
+from samsarix_analytics import MetricRegistry, instrument_wsgi
+
+registry = MetricRegistry()
+application = instrument_wsgi(application, registry)
+```
+
+`instrument_asgi(application, registry)` provides the async equivalent. Both wrappers
+record completed requests, request duration, and active requests. Method values are
+restricted to the standard HTTP methods plus `OTHER`, and responses use only a bounded
+status class (`2xx`, `5xx`, and so on). Raw paths, query strings, headers, client
+addresses, and request bodies are never used as labels or logged. Application
+exceptions propagate normally; metric-capacity or recording failures are isolated and
+logged without application data.
+
 ## Preserve explicit local state
 
 Checkpointing is opt-in for batch jobs, edge workers, and other processes that own the
@@ -212,15 +230,19 @@ Checkpoint size is bounded separately (10 MiB by default). Applications choosing
 larger registry must opt into correspondingly larger `CheckpointPolicy` limits when
 loading untrusted or externally stored state.
 
+See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for the reproducible benchmark,
+measured local result, retention assertion, and limitations of that evidence.
+
 ## Development and verification
 
 ```bash
 python -m ruff format --check .
 python -m ruff check .
-python -m mypy samsarix_analytics
+python -m mypy samsarix_analytics benchmarks
 python -m pytest --cov=samsarix_analytics --cov-report=term-missing
 python -m build
 python -m twine check dist/*
+python -m benchmarks.benchmark_core --iterations 100000 --series 10
 ```
 
 CI runs formatting, lint, strict type checks, coverage, and package build checks across
@@ -235,6 +257,7 @@ Python 3.10 through 3.14. Release publication is intentionally manual and owner-
 - `samsarix_analytics.exposition`: WSGI, ASGI, and explicit standalone HTTP adapters.
 - `samsarix_analytics.checkpoint`: deterministic encoding, load policy, atomic file
   replacement, and checkpoint integrity metadata.
+- `samsarix_analytics.instrumentation`: bounded WSGI/ASGI request lifecycle metrics.
 - `samsarix_analytics.cli`: deterministic installed-package evaluation path.
 
 The package performs no automatic global registration, I/O, service discovery, or

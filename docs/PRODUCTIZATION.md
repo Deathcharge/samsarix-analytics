@@ -45,6 +45,9 @@ dashboard, database, agent monitor, or replacement for OpenTelemetry.
 - Official Prometheus WSGI/ASGI patterns and exposition requirements make HTTP adapters
   the smallest useful interoperability layer. The standalone helper defaults to
   loopback and does not pretend to provide TLS or multiprocess aggregation.
+- HTTP instrumentation uses a fixed method/status-class label space and excludes raw
+  paths, queries, headers, bodies, and client addresses to avoid cardinality and privacy
+  surprises.
 - OpenTelemetry metrics for Python are stable, so an OTel adapter is a plausible P2
   extension. It is deliberately not a core dependency because the first release is a
   lightweight embedded store.
@@ -125,6 +128,7 @@ dashboard, database, agent monitor, or replacement for OpenTelemetry.
 - [x] Threshold alerting with cooldown and auto-resolution.
 - [x] Runnable CLI demo and source example.
 - [x] Scrapeable HTTP and restartable checkpoint examples.
+- [x] Framework-neutral WSGI/ASGI request lifecycle instrumentation.
 - [x] Unit, integration, CLI, and installed-wheel tests.
 - [x] CI across supported Python versions.
 - [x] Accurate README, contribution, security, and changelog documents.
@@ -165,7 +169,10 @@ dashboard, database, agent monitor, or replacement for OpenTelemetry.
   separate trademark policy.
 - Current-alternative research and a documented local-first product wedge.
 - Dependency-free WSGI/ASGI exposition, an explicit loopback server, deterministic
-  atomic registry checkpoints, and CLI checkpoint inspection for `0.3.0`.
+  atomic registry checkpoints, CLI checkpoint inspection, and bounded HTTP request
+  middleware for `0.3.0`.
+- A reproducible 100,000-operation benchmark with measured local recording, rendering,
+  checkpoint encoding, and exact bounded-retention evidence.
 
 ## Release disposition
 
