@@ -27,10 +27,14 @@ The package must:
   alert rules, handlers, and history;
 - isolate alert callback failures;
 - perform no implicit network, file, credential, or environment access;
+- bind the opt-in standalone metrics server to loopback by default;
+- compare optional bearer credentials without data-dependent string comparison;
 - avoid logging metric label values or other application data by default.
 
-Applications remain responsible for authorizing access to exported snapshots and for
-avoiding secrets, personal data, and high-cardinality identifiers in labels.
+Applications remain responsible for authorizing access to exported snapshots and HTTP
+endpoints and for avoiding secrets, personal data, and high-cardinality identifiers in
+labels. The standalone server is intended for loopback or trusted private networks; use
+a TLS-capable application server or reverse proxy when metrics cross a trust boundary.
 
 General product questions belong at contact@samsarix.com; security and support requests
 belong at support@samsarix.com.

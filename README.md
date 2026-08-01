@@ -19,6 +19,7 @@ OpenTelemetry adapters are intentionally out of scope for this release.
   label length, alert rules/handlers, and alert history;
 - strict validation for definitions, labels, and finite observations;
 - JSON snapshots and Prometheus-compatible text export;
+- WSGI, ASGI, and loopback-by-default Prometheus HTTP exposition;
 - threshold rules over values or histogram aggregates (`avg`, `p95`, and others);
 - alert deduplication, cooldown, acknowledgement, auto-resolution, and isolated
   notification callbacks;
@@ -98,6 +99,35 @@ python -m samsarix_analytics demo --format json
 
 See [`examples/basic_usage.py`](examples/basic_usage.py) for a complete script.
 
+## Expose metrics to Prometheus
+
+Mount a dependency-free endpoint inside an existing WSGI application:
+
+```python
+from samsarix_analytics import MetricRegistry, make_wsgi_app
+
+registry = MetricRegistry()
+requests = registry.counter("requests_total", "Requests processed")
+metrics_app = make_wsgi_app(registry)
+```
+
+`make_asgi_app(registry)` provides the same contract for ASGI servers. For a local
+worker, CLI, or development process, the standalone helper binds to loopback by
+default and shuts down explicitly:
+
+```python
+from samsarix_analytics import MetricRegistry, start_metrics_server
+
+registry = MetricRegistry()
+with start_metrics_server(registry, port=9464) as server:
+    print(server.url)  # http://127.0.0.1:9464/metrics
+    run_application(registry)
+```
+
+Run `python examples/http_exposition.py` for a scrapeable 15-second demo. Endpoint
+factories support an optional bearer token, exact path matching, `GET`, `HEAD`, and
+`OPTIONS`, and the Prometheus `text/plain; version=0.0.4` content type.
+
 ## Error and lifecycle behavior
 
 - Registering the same metric definition twice returns the original instrument.
@@ -117,7 +147,9 @@ See [`examples/basic_usage.py`](examples/basic_usage.py) for a complete script.
 
 Prometheus output covers counters, gauges, and classic histogram buckets, sums, and
 counts. Metric and label names are validated, while help text and label values are
-escaped before rendering.
+escaped before rendering. HTTP responses disable caching and content sniffing. The
+standalone server intentionally defaults to `127.0.0.1`; put public or shared-network
+endpoints behind a TLS-capable reverse proxy and access control.
 
 Every unique label set is a time series. Do not use user IDs, request IDs, raw URLs,
 emails, tokens, or other unbounded/sensitive values as labels. The default limit is 100
@@ -158,6 +190,7 @@ Python 3.10 through 3.14. Release publication is intentionally manual and owner-
   snapshots, Prometheus rendering, and duration tracking.
 - `samsarix_analytics.monitoring.alerting`: rules, lifecycle, cooldown, bounded history,
   and callback dispatch.
+- `samsarix_analytics.exposition`: WSGI, ASGI, and explicit standalone HTTP adapters.
 - `samsarix_analytics.cli`: deterministic installed-package evaluation path.
 
 The package performs no automatic global registration, I/O, service discovery, or
@@ -168,7 +201,8 @@ environment inspection. Applications own their registry and alert manager explic
 - State is process-local and is lost on restart.
 - Multiple worker processes do not aggregate automatically.
 - Percentiles are exact only for the bounded recent sample window.
-- There is no HTTP server or framework middleware in the core package.
+- The standalone HTTP helper does not provide TLS or multiprocess aggregation; use an
+  application server/reverse proxy and one registry per process where those are needed.
 - There is no OpenTelemetry export adapter yet; use this package as a small local layer,
   not as a replacement for a full distributed telemetry pipeline.
 
