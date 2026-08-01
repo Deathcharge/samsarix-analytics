@@ -28,6 +28,7 @@ The package must:
 - isolate alert callback failures;
 - perform no implicit network, file, credential, or environment access;
 - bind the opt-in standalone metrics server to loopback by default;
+- cap HTTP exposition by encoded response bytes before the complete registry is rendered;
 - compare optional bearer credentials without data-dependent string comparison;
 - normalize HTTP instrumentation to a fixed method/status-class label space and never
   capture raw paths, queries, headers, bodies, or client addresses;
@@ -36,6 +37,7 @@ The package must:
   checkpoint data before it becomes live metric state;
 - write checkpoints through private, flushed, same-directory temporary files followed
   by atomic replacement;
+- reject directories, devices, pipes, and other non-regular checkpoint inputs;
 - avoid logging metric label values or other application data by default.
 
 Applications remain responsible for authorizing access to exported snapshots and HTTP

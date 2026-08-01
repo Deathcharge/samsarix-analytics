@@ -17,6 +17,9 @@ the public API remains pre-1.0.
 - CLI checkpoint inspection plus scrapeable-server and restartable-worker examples.
 - Evidence-backed competitive positioning and `0.3.0` acceptance criteria.
 - Reproducible recording, rendering, checkpoint, and retention benchmark.
+- Hardened bearer-token validation, regular-file checkpoint loading, and restored
+  histogram consistency checks.
+- Added a default 10 MiB byte budget to Prometheus HTTP rendering.
 
 ### Changed
 

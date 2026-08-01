@@ -129,7 +129,10 @@ with start_metrics_server(registry, port=9464) as server:
 Run `python -m examples.http_exposition` from an installed source checkout for a
 scrapeable 15-second demo. Endpoint
 factories support an optional bearer token, exact path matching, `GET`, `HEAD`, and
-`OPTIONS`, and the Prometheus `text/plain; version=0.0.4` content type.
+`OPTIONS`, a 10 MiB response budget, and the Prometheus
+`text/plain; version=0.0.4` content type. Oversized output fails with `503` rather than
+being sent partially; customize `max_response_bytes` only with an explicit resource
+budget.
 
 Instrument an existing application without framework-specific dependencies:
 

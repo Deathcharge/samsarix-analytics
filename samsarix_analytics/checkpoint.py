@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import os
+import stat
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -413,8 +414,19 @@ def load_checkpoint(
 
     policy = policy or CheckpointPolicy()
     target = Path(path)
-    with target.open("rb") as handle:
-        payload = handle.read(policy.max_file_bytes + 1)
+    if target.is_dir():
+        raise CheckpointError(f"checkpoint path must be a regular file: {target}")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
+    descriptor = os.open(target, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise CheckpointError(f"checkpoint path must be a regular file: {target}")
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            payload = handle.read(policy.max_file_bytes + 1)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     return decode_checkpoint(payload, policy=policy)
 
 

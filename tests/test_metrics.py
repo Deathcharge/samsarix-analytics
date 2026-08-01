@@ -107,6 +107,11 @@ def test_prometheus_output_escapes_labels_and_help() -> None:
     assert "# HELP events_total Events\\\\from\\nworkers" in output
     assert 'source="a\\"b\\\\c\\n"' in output
     assert "# TYPE events_total counter" in output
+    assert registry.to_prometheus(max_bytes=len(output.encode("utf-8"))) == output
+    with pytest.raises(MetricError, match="exceeds max_bytes"):
+        registry.to_prometheus(max_bytes=len(output.encode("utf-8")) - 1)
+    with pytest.raises(MetricError, match="positive integer"):
+        registry.to_prometheus(max_bytes=0)
 
 
 def test_track_duration_records_on_success_and_failure() -> None:

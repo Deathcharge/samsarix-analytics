@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -162,6 +163,36 @@ def test_checkpoint_schema_and_series_invariants_are_validated() -> None:
     with pytest.raises(CheckpointError, match="cumulative"):
         decode_checkpoint(json.dumps(state).encode())
 
+    state = json.loads(encode_checkpoint(_populated_registry()))
+    histogram = next(metric for metric in state["metrics"] if metric["type"] == "histogram")
+    histogram["series"][0]["sum"] = 100
+    with pytest.raises(CheckpointError, match="mean must be within"):
+        decode_checkpoint(json.dumps(state).encode())
+
+    state = json.loads(encode_checkpoint(_populated_registry()))
+    histogram = next(metric for metric in state["metrics"] if metric["type"] == "histogram")
+    histogram["series"][0]["bucket_counts"][:2] = [0, 0]
+    with pytest.raises(CheckpointError, match="smaller than recent"):
+        decode_checkpoint(json.dumps(state).encode())
+
+    state = json.loads(encode_checkpoint(_populated_registry()))
+    histogram = next(metric for metric in state["metrics"] if metric["type"] == "histogram")
+    histogram["series"][0]["min"] = 0.2
+    with pytest.raises(CheckpointError, match="below min must be empty"):
+        decode_checkpoint(json.dumps(state).encode())
+
+    state = json.loads(encode_checkpoint(_populated_registry()))
+    histogram = next(metric for metric in state["metrics"] if metric["type"] == "histogram")
+    histogram["buckets"][-1] = 2.0
+    with pytest.raises(CheckpointError, match="at or above max"):
+        decode_checkpoint(json.dumps(state).encode())
+
+    state = json.loads(encode_checkpoint(_populated_registry()))
+    histogram = next(metric for metric in state["metrics"] if metric["type"] == "histogram")
+    histogram["series"][0]["count"] = 2**63
+    with pytest.raises(CheckpointError, match="signed 64-bit"):
+        decode_checkpoint(json.dumps(state).encode())
+
 
 def test_checkpoint_path_and_argument_validation(tmp_path: Path) -> None:
     with pytest.raises(CheckpointError, match="positive integer"):
@@ -174,3 +205,13 @@ def test_checkpoint_path_and_argument_validation(tmp_path: Path) -> None:
         save_checkpoint(_populated_registry(), tmp_path / "missing" / "state.json")
     with pytest.raises(IsADirectoryError, match="directory"):
         save_checkpoint(_populated_registry(), tmp_path)
+    with pytest.raises(CheckpointError, match="regular file"):
+        load_checkpoint(tmp_path)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs are not available on this platform")
+def test_checkpoint_loader_rejects_fifo_without_blocking(tmp_path: Path) -> None:
+    fifo = tmp_path / "checkpoint.fifo"
+    os.mkfifo(fifo)
+    with pytest.raises(CheckpointError, match="regular file"):
+        load_checkpoint(fifo)

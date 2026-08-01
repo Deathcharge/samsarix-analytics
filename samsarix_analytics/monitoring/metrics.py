@@ -22,6 +22,7 @@ _LABEL_NAME: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 _HISTOGRAM_AGGREGATIONS: Final = frozenset(
     {"count", "sum", "avg", "min", "max", "p50", "p90", "p95", "p99"}
 )
+_MAX_CHECKPOINT_HISTOGRAM_COUNT: Final = 2**63 - 1
 
 
 class MetricError(ValueError):
@@ -567,13 +568,24 @@ class Histogram(_Instrument):
     ) -> None:
         """Restore one already-validated series without replaying old observations."""
 
-        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
-            raise MetricError("checkpoint histogram count must be a positive integer")
+        if (
+            isinstance(count, bool)
+            or not isinstance(count, int)
+            or not 1 <= count <= _MAX_CHECKPOINT_HISTOGRAM_COUNT
+        ):
+            raise MetricError("checkpoint histogram count must be a positive signed 64-bit integer")
         normalized_total = _finite_number(total, field_name="checkpoint histogram sum")
         normalized_minimum = _finite_number(minimum, field_name="checkpoint histogram min")
         normalized_maximum = _finite_number(maximum, field_name="checkpoint histogram max")
         if normalized_minimum > normalized_maximum:
             raise MetricError("checkpoint histogram min cannot exceed max")
+        average = normalized_total / count
+        if not (
+            normalized_minimum <= average <= normalized_maximum
+            or math.isclose(average, normalized_minimum, rel_tol=1e-12, abs_tol=1e-15)
+            or math.isclose(average, normalized_maximum, rel_tol=1e-12, abs_tol=1e-15)
+        ):
+            raise MetricError("checkpoint histogram mean must be within min and max")
         normalized_counts = tuple(bucket_counts)
         if len(normalized_counts) != len(self.buckets):
             raise MetricError("checkpoint histogram bucket count length does not match definition")
@@ -598,6 +610,16 @@ class Histogram(_Instrument):
             value < normalized_minimum or value > normalized_maximum for value in normalized_recent
         ):
             raise MetricError("checkpoint histogram recent values must be within min and max")
+        for upper_bound, bucket_count in zip(self.buckets, normalized_counts, strict=True):
+            recent_count = sum(value <= upper_bound for value in normalized_recent)
+            if bucket_count < recent_count:
+                raise MetricError(
+                    "checkpoint histogram bucket count cannot be smaller than recent observations"
+                )
+            if upper_bound < normalized_minimum and bucket_count != 0:
+                raise MetricError("checkpoint histogram bucket below min must be empty")
+            if upper_bound >= normalized_maximum and bucket_count != count:
+                raise MetricError("checkpoint histogram bucket at or above max must contain count")
         if count == len(normalized_recent):
             if not math.isclose(sum(normalized_recent), normalized_total, rel_tol=1e-12):
                 raise MetricError("checkpoint histogram sum does not match its observations")
@@ -766,10 +788,21 @@ class MetricRegistry:
     def to_json(self, *, indent: int | None = 2) -> str:
         return json.dumps(self.snapshot(), indent=indent, sort_keys=True)
 
-    def to_prometheus(self) -> str:
+    def to_prometheus(self, *, max_bytes: int | None = None) -> str:
+        if max_bytes is not None and (
+            isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1
+        ):
+            raise MetricError("max_bytes must be a positive integer or None")
         with self._lock:
             instruments = [self._instruments[name] for name in sorted(self._instruments)]
-        lines = [line for instrument in instruments for line in instrument.prometheus_lines()]
+        lines: list[str] = []
+        encoded_size = 0
+        for instrument in instruments:
+            for line in instrument.prometheus_lines():
+                encoded_size += len(line.encode("utf-8")) + 1
+                if max_bytes is not None and encoded_size > max_bytes:
+                    raise MetricError(f"Prometheus output exceeds max_bytes={max_bytes}")
+                lines.append(line)
         return "\n".join(lines) + ("\n" if lines else "")
 
     def _checkpoint_state(self) -> dict[str, object]:

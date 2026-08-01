@@ -91,8 +91,37 @@ def test_wsgi_app_validates_configuration() -> None:
         make_wsgi_app(registry, path="/metrics?unsafe=true")
     with pytest.raises(ValueError, match="non-empty"):
         make_wsgi_app(registry, bearer_token="")
-    with pytest.raises(ValueError, match="too long"):
+    with pytest.raises(ValueError, match="visible ASCII"):
         make_wsgi_app(registry, bearer_token="x" * 4097)
+    with pytest.raises(ValueError, match="visible ASCII"):
+        make_wsgi_app(registry, bearer_token="sëcret")
+    with pytest.raises(ValueError, match="visible ASCII"):
+        make_wsgi_app(registry, bearer_token="secret token")
+    with pytest.raises(ValueError, match="max_response_bytes"):
+        make_wsgi_app(registry, max_response_bytes=0)
+
+    status, _headers, _body = _call_wsgi(authorization="Bearer sëcret")
+    assert status == "401 Unauthorized"
+
+
+def test_wsgi_app_refuses_oversized_rendering(caplog: pytest.LogCaptureFixture) -> None:
+    registry = MetricRegistry()
+    registry.counter("large_total", "x" * 100).inc()
+    app = make_wsgi_app(registry, max_response_bytes=32)
+    status = ""
+
+    def start_response(
+        value: str,
+        _headers: list[tuple[str, str]],
+        _exc_info: object | None = None,
+    ) -> None:
+        nonlocal status
+        status = value
+
+    body = b"".join(app({"REQUEST_METHOD": "GET", "PATH_INFO": "/metrics"}, start_response))  # type: ignore[arg-type]
+    assert status == "503 Service Unavailable"
+    assert body == b"# metrics output exceeds configured response limit\n"
+    assert "refused to render Prometheus metrics" in caplog.text
 
 
 def test_asgi_app_serves_metrics_and_rejects_non_http_scope() -> None:

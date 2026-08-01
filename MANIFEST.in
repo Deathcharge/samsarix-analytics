@@ -4,6 +4,7 @@ include CONTRIBUTING.md
 include LICENSE
 include LICENSING.md
 include NOTICE
+include ROADMAP.md
 include SECURITY.md
 include TRADEMARKS.md
 include requirements.txt

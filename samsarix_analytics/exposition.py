@@ -13,13 +13,14 @@ from threading import Lock, Thread
 from typing import Protocol, cast
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 
-from .monitoring.metrics import MetricRegistry
+from .monitoring.metrics import MetricError, MetricRegistry
 
 logger = logging.getLogger(__name__)
 
 PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 _PLAIN_CONTENT_TYPE = "text/plain; charset=utf-8"
 _ALLOWED_METHODS = "GET, HEAD, OPTIONS"
+_DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 
 
 class StartResponse(Protocol):
@@ -70,9 +71,23 @@ def _validate_token(bearer_token: str | None) -> str | None:
         return None
     if not isinstance(bearer_token, str) or not bearer_token:
         raise ValueError("bearer_token must be a non-empty string")
-    if len(bearer_token) > 4096 or any(ord(character) < 32 for character in bearer_token):
-        raise ValueError("bearer_token is too long or contains a control character")
+    if (
+        len(bearer_token) > 4096
+        or not bearer_token.isascii()
+        or any(not 33 <= ord(character) <= 126 for character in bearer_token)
+    ):
+        raise ValueError("bearer_token must contain only visible ASCII characters")
     return bearer_token
+
+
+def _validate_max_response_bytes(max_response_bytes: int) -> int:
+    if (
+        isinstance(max_response_bytes, bool)
+        or not isinstance(max_response_bytes, int)
+        or max_response_bytes < 1
+    ):
+        raise ValueError("max_response_bytes must be a positive integer")
+    return max_response_bytes
 
 
 def _is_authorized(authorization: str | None, bearer_token: str | None) -> bool:
@@ -80,7 +95,10 @@ def _is_authorized(authorization: str | None, bearer_token: str | None) -> bool:
         return True
     if authorization is None or not authorization.startswith("Bearer "):
         return False
-    return hmac.compare_digest(authorization[7:], bearer_token)
+    provided = authorization[7:]
+    if not provided.isascii():
+        return False
+    return hmac.compare_digest(provided.encode("ascii"), bearer_token.encode("ascii"))
 
 
 def _response_for(
@@ -91,6 +109,7 @@ def _response_for(
     method: str,
     authorization: str | None,
     bearer_token: str | None,
+    max_response_bytes: int,
 ) -> _Response:
     if request_path != configured_path:
         return _Response("404 Not Found", b"# not found\n")
@@ -109,7 +128,13 @@ def _response_for(
             headers=(("WWW-Authenticate", 'Bearer realm="metrics"'),),
         )
     try:
-        body = registry.to_prometheus().encode("utf-8")
+        body = registry.to_prometheus(max_bytes=max_response_bytes).encode("utf-8")
+    except MetricError as exc:
+        logger.warning("refused to render Prometheus metrics: %s", exc)
+        return _Response(
+            "503 Service Unavailable",
+            b"# metrics output exceeds configured response limit\n",
+        )
     except Exception:
         logger.exception("failed to render Prometheus metrics")
         return _Response("500 Internal Server Error", b"# metrics rendering failed\n")
@@ -121,11 +146,13 @@ def make_wsgi_app(
     *,
     path: str = "/metrics",
     bearer_token: str | None = None,
+    max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
 ) -> WSGIApp:
     """Create a WSGI metrics endpoint with optional bearer-token authentication."""
 
     configured_path = _validate_path(path)
     configured_token = _validate_token(bearer_token)
+    configured_max_bytes = _validate_max_response_bytes(max_response_bytes)
 
     def app(environ: Mapping[str, object], start_response: StartResponse) -> Iterable[bytes]:
         method_value = environ.get("REQUEST_METHOD", "GET")
@@ -139,6 +166,7 @@ def make_wsgi_app(
             method=method,
             authorization=(authorization_value if isinstance(authorization_value, str) else None),
             bearer_token=configured_token,
+            max_response_bytes=configured_max_bytes,
         )
         start_response(response.status, response.http_headers())
         return [] if method == "HEAD" else [response.body]
@@ -171,11 +199,13 @@ def make_asgi_app(
     *,
     path: str = "/metrics",
     bearer_token: str | None = None,
+    max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
 ) -> ASGIApp:
     """Create an ASGI metrics endpoint with optional bearer-token authentication."""
 
     configured_path = _validate_path(path)
     configured_token = _validate_token(bearer_token)
+    configured_max_bytes = _validate_max_response_bytes(max_response_bytes)
 
     async def app(scope: ASGIScope, _receive: ASGIReceive, send: ASGISend) -> None:
         if scope.get("type") != "http":
@@ -190,6 +220,7 @@ def make_asgi_app(
             method=method,
             authorization=_asgi_header(scope, b"authorization"),
             bearer_token=configured_token,
+            max_response_bytes=configured_max_bytes,
         )
         await send(
             {
@@ -261,6 +292,7 @@ def start_metrics_server(
     port: int = 9464,
     path: str = "/metrics",
     bearer_token: str | None = None,
+    max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
 ) -> MetricsServer:
     """Start a stdlib WSGI server; loopback is the secure default binding."""
 
@@ -269,7 +301,12 @@ def start_metrics_server(
     if isinstance(port, bool) or not isinstance(port, int) or not 0 <= port <= 65535:
         raise ValueError("port must be an integer between 0 and 65535")
     configured_path = _validate_path(path)
-    app = make_wsgi_app(registry, path=configured_path, bearer_token=bearer_token)
+    app = make_wsgi_app(
+        registry,
+        path=configured_path,
+        bearer_token=bearer_token,
+        max_response_bytes=max_response_bytes,
+    )
     server = make_server(
         host, port, cast(Callable[..., Iterable[bytes]], app), handler_class=_QuietRequestHandler
     )
