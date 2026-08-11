@@ -34,10 +34,10 @@ dashboard, database, agent monitor, or replacement for OpenTelemetry.
 
 - The public API is explicit and small: `MetricRegistry`, `Counter`, `Gauge`,
   `Histogram`, `AlertManager`, and `AlertRule`.
-- Metric names and label names are validated. Values must be finite. Counters cannot
-  decrease.
-- Series cardinality, histogram sample retention, label length, metric count, and
-  alert history are bounded to prevent accidental process-memory amplification.
+- Metric names and label names are validated. Label values are bounded UTF-8 strings,
+  numeric values must be finite, and counters cannot decrease.
+- Series cardinality, histogram bucket count and sample retention, label length, metric
+  count, and alert history are bounded to prevent process-memory amplification.
 - JSON and Prometheus rendering are local and synchronous. HTTP serving and checkpoint
   I/O occur only through explicit adapters selected by the application.
 - Prometheus export escapes untrusted label values and help text. High-cardinality
@@ -158,11 +158,13 @@ dashboard, database, agent monitor, or replacement for OpenTelemetry.
   fabricated product behavior.
 - Packaging and dependency metadata consolidation around a single `pyproject.toml`.
 - A typed, thread-safe metrics registry with explicit caps on metrics, labeled series,
-  label lengths, histogram samples, alert rules, callbacks, and alert history.
+  label lengths, histogram buckets and samples, alert rules, callbacks, and alert history.
 - Real threshold evaluation, cooldown and resolution behavior, callback isolation,
   deterministic export, a CLI demo, and a source example.
-- A 36-test suite with branch coverage above the 90% release gate, strict type and lint
-  checks, distribution-content checks, and a Python 3.10-3.14 CI workflow.
+- An 81-case release-candidate suite with branch coverage above the 90% release gate,
+  strict type and lint checks, distribution-content checks, and a Python 3.10-3.14 CI
+  workflow. Release-readiness work adds synchronized metadata and installed-wheel
+  compatibility checks.
 - A complete Samsarix LLC rebrand across distribution, import package, CLI, schema,
   metadata, contacts, documentation, and repository URLs before first publication.
 - Standard MPL-2.0 licensing with SPDX source notices, Samsarix attribution, and a
@@ -173,24 +175,29 @@ dashboard, database, agent monitor, or replacement for OpenTelemetry.
   middleware for `0.3.0`.
 - A reproducible 100,000-operation benchmark with measured local recording, rendering,
   checkpoint encoding, and exact bounded-retention evidence.
+- A least-privilege GitHub Release workflow that builds once from hash-locked tooling,
+  verifies the exact two-file artifact set, generates provenance attestations, refuses
+  asset replacement, and leaves PyPI behind an explicit variable and environment gate.
 
 ## Release disposition
 
-The engineering result is a release candidate: the local acceptance criteria pass and
-there is no known core-path P0. Public publication remains owner-controlled and requires
-a green remote CI run, PyPI credentials and name ownership, and confirmation that
-Samsarix LLC's chain of title is documented. Until those gates are closed, do not
-describe the package as generally available or production-deployed.
+The engineering result is a release candidate: the local acceptance criteria and the
+Python 3.10-3.14 remote matrix pass, the exact wheel has been exercised outside the
+source checkout, and there is no known core-path P0. Public publication remains
+owner-controlled and requires PyPI name ownership, Trusted Publisher activation, and
+confirmation that Samsarix LLC's chain of title is documented. Until those gates are
+closed, do not describe the package as generally available or production-deployed.
 
 ## Deferred and externally blocked work
 
 - Owner/legal: retain written evidence that Samsarix LLC owns or has authority to
   relicense the earlier Helix-branded repository contributions; consider counsel review
   and trademark registration as the product grows.
-- Owner/release: claim the currently unused `samsarix-analytics` PyPI name through an
-  intentional first release, configure trusted publishing, and create the release tag.
+- Owner/release: register the pending Trusted Publisher described in
+  `docs/RELEASING.md`, claim the currently unused `samsarix-analytics` PyPI name through
+  an intentional first release, and then enable the repository publication gate.
 - Production deployment is not applicable to the core library. No package publication,
-  live infrastructure, credentials, or external accounts are created by this work.
+  live service, or long-lived publishing credential is created by this work.
 
 ## Known risks
 

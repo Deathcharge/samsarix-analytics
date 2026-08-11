@@ -7,10 +7,13 @@ from __future__ import annotations
 
 import hmac
 import logging
+import math
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from threading import Lock, Thread
-from typing import Protocol, cast
+from socket import socket
+from socketserver import ThreadingMixIn
+from threading import BoundedSemaphore, Lock, Thread
+from typing import Any, Protocol, cast
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 
 from .monitoring.metrics import MetricError, MetricRegistry
@@ -90,10 +93,24 @@ def _validate_max_response_bytes(max_response_bytes: int) -> int:
     return max_response_bytes
 
 
+def _validate_max_concurrent_requests(max_concurrent_requests: int) -> int:
+    if (
+        isinstance(max_concurrent_requests, bool)
+        or not isinstance(max_concurrent_requests, int)
+        or max_concurrent_requests < 1
+    ):
+        raise ValueError("max_concurrent_requests must be a positive integer")
+    return max_concurrent_requests
+
+
 def _is_authorized(authorization: str | None, bearer_token: str | None) -> bool:
     if bearer_token is None:
         return True
-    if authorization is None or not authorization.startswith("Bearer "):
+    if (
+        authorization is None
+        or len(authorization) != len(bearer_token) + len("Bearer ")
+        or not authorization.startswith("Bearer ")
+    ):
         return False
     provided = authorization[7:]
     if not provided.isascii():
@@ -174,7 +191,7 @@ def make_wsgi_app(
     return app
 
 
-def _asgi_header(scope: ASGIScope, name: bytes) -> str | None:
+def _asgi_header(scope: ASGIScope, name: bytes, *, expected_length: int) -> str | None:
     raw_headers = scope.get("headers", ())
     if not isinstance(raw_headers, (list, tuple)):
         return None
@@ -187,6 +204,8 @@ def _asgi_header(scope: ASGIScope, name: bytes) -> str | None:
             and isinstance(raw_value, bytes)
             and raw_name.lower() == name
         ):
+            if len(raw_value) != expected_length:
+                return None
             try:
                 return raw_value.decode("latin-1")
             except UnicodeDecodeError:
@@ -218,7 +237,15 @@ def make_asgi_app(
             configured_path=configured_path,
             request_path=path_value if isinstance(path_value, str) else "",
             method=method,
-            authorization=_asgi_header(scope, b"authorization"),
+            authorization=(
+                None
+                if configured_token is None
+                else _asgi_header(
+                    scope,
+                    b"authorization",
+                    expected_length=len(configured_token) + len("Bearer "),
+                )
+            ),
             bearer_token=configured_token,
             max_response_bytes=configured_max_bytes,
         )
@@ -245,6 +272,41 @@ def make_asgi_app(
 class _QuietRequestHandler(WSGIRequestHandler):
     def log_message(self, _format: str, *args: object) -> None:
         return None
+
+
+class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
+    """Serve clients independently so a slow peer cannot pin shutdown."""
+
+    daemon_threads = True
+    block_on_close = False
+    request_timeout_seconds = 5.0
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self._worker_slots = BoundedSemaphore(32)
+        super().__init__(*args, **kwargs)
+
+    def get_request(self) -> tuple[socket, Any]:
+        request, client_address = super().get_request()
+        request.settimeout(self.request_timeout_seconds)
+        return request, client_address
+
+    def process_request(self, request: socket | tuple[bytes, socket], client_address: Any) -> None:
+        if not self._worker_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._worker_slots.release()
+            raise
+
+    def process_request_thread(
+        self, request: socket | tuple[bytes, socket], client_address: Any
+    ) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._worker_slots.release()
 
 
 @dataclass
@@ -293,6 +355,8 @@ def start_metrics_server(
     path: str = "/metrics",
     bearer_token: str | None = None,
     max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
+    request_timeout_seconds: float = 5.0,
+    max_concurrent_requests: int = 32,
 ) -> MetricsServer:
     """Start a stdlib WSGI server; loopback is the secure default binding."""
 
@@ -300,7 +364,15 @@ def start_metrics_server(
         raise ValueError("host must be a non-empty string")
     if isinstance(port, bool) or not isinstance(port, int) or not 0 <= port <= 65535:
         raise ValueError("port must be an integer between 0 and 65535")
+    if (
+        isinstance(request_timeout_seconds, bool)
+        or not isinstance(request_timeout_seconds, (int, float))
+        or not math.isfinite(request_timeout_seconds)
+        or request_timeout_seconds <= 0
+    ):
+        raise ValueError("request_timeout_seconds must be a finite positive number")
     configured_path = _validate_path(path)
+    configured_max_requests = _validate_max_concurrent_requests(max_concurrent_requests)
     app = make_wsgi_app(
         registry,
         path=configured_path,
@@ -308,8 +380,14 @@ def start_metrics_server(
         max_response_bytes=max_response_bytes,
     )
     server = make_server(
-        host, port, cast(Callable[..., Iterable[bytes]], app), handler_class=_QuietRequestHandler
+        host,
+        port,
+        cast(Callable[..., Iterable[bytes]], app),
+        server_class=_ThreadingWSGIServer,
+        handler_class=_QuietRequestHandler,
     )
+    server.request_timeout_seconds = float(request_timeout_seconds)
+    server._worker_slots = BoundedSemaphore(configured_max_requests)
     bound_host, bound_port = server.server_address[:2]
     thread = Thread(target=server.serve_forever, name="samsarix-metrics", daemon=True)
     thread.start()

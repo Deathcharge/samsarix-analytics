@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import asyncio
+import socket
+import time
 from collections.abc import Iterable
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -102,6 +104,8 @@ def test_wsgi_app_validates_configuration() -> None:
 
     status, _headers, _body = _call_wsgi(authorization="Bearer sëcret")
     assert status == "401 Unauthorized"
+    status, _headers, _body = _call_wsgi(authorization="Bearer " + "x" * 100_000)
+    assert status == "401 Unauthorized"
 
 
 def test_wsgi_app_refuses_oversized_rendering(caplog: pytest.LogCaptureFixture) -> None:
@@ -152,6 +156,21 @@ def test_asgi_app_serves_metrics_and_rejects_non_http_scope() -> None:
     with pytest.raises(ValueError, match="only HTTP"):
         asyncio.run(app({"type": "websocket"}, receive, send))
 
+    messages.clear()
+    asyncio.run(
+        app(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/metrics",
+                "headers": [(b"authorization", b"Bearer " + b"x" * 100_000)],
+            },
+            receive,
+            send,
+        )
+    )
+    assert messages[0]["status"] == 401
+
 
 def test_standalone_server_uses_ephemeral_loopback_port_and_stops() -> None:
     with start_metrics_server(_registry(), port=0, bearer_token="secret") as server:
@@ -168,7 +187,58 @@ def test_standalone_server_uses_ephemeral_loopback_port_and_stops() -> None:
     server.close()
 
 
+def test_standalone_server_shutdown_is_not_pinned_by_slow_client() -> None:
+    server = start_metrics_server(_registry(), port=0, request_timeout_seconds=0.1)
+    client = socket.create_connection((server.host, server.port), timeout=1)
+    try:
+        client.sendall(b"GET /metrics HTTP/1.1\r\nHost: local\r\n")
+        time.sleep(0.05)
+        started = time.monotonic()
+        server.close(timeout=1)
+        assert time.monotonic() - started < 1
+    finally:
+        client.close()
+
+
+def test_standalone_server_rejects_requests_above_worker_capacity() -> None:
+    server = start_metrics_server(
+        _registry(),
+        port=0,
+        request_timeout_seconds=1,
+        max_concurrent_requests=1,
+    )
+    slow_client = socket.create_connection((server.host, server.port), timeout=1)
+    rejected_client: socket.socket | None = None
+    try:
+        slow_client.sendall(b"GET /metrics HTTP/1.1\r\nHost: local\r\n")
+        time.sleep(0.05)
+        rejected_client = socket.create_connection((server.host, server.port), timeout=1)
+        rejected_client.sendall(b"GET /metrics HTTP/1.1\r\nHost: local\r\n\r\n")
+        try:
+            response = rejected_client.recv(1024)
+        except (ConnectionResetError, OSError):
+            response = b""
+        assert response == b""
+    finally:
+        slow_client.close()
+        if rejected_client is not None:
+            rejected_client.close()
+        server.close(timeout=2)
+
+
 @pytest.mark.parametrize("port", [-1, 65536, True])
 def test_standalone_server_validates_port(port: int) -> None:
     with pytest.raises(ValueError, match="port"):
         start_metrics_server(MetricRegistry(), port=port)
+
+
+@pytest.mark.parametrize("timeout", [0, -1, True, float("inf")])
+def test_standalone_server_validates_request_timeout(timeout: float) -> None:
+    with pytest.raises(ValueError, match="request_timeout_seconds"):
+        start_metrics_server(MetricRegistry(), port=0, request_timeout_seconds=timeout)
+
+
+@pytest.mark.parametrize("maximum", [0, -1, True, 1.5])
+def test_standalone_server_validates_worker_capacity(maximum: int) -> None:
+    with pytest.raises(ValueError, match="max_concurrent_requests"):
+        start_metrics_server(MetricRegistry(), port=0, max_concurrent_requests=maximum)

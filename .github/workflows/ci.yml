@@ -23,8 +23,42 @@ jobs:
       - run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
       - run: python -m ruff format --check .
       - run: python -m ruff check .
-      - run: python -m mypy samsarix_analytics benchmarks
+      - run: python -m mypy samsarix_analytics benchmarks scripts
+      - run: python scripts/verify_release.py
       - run: python -m pytest --cov=samsarix_analytics --cov-report=term-missing
       - run: python -m benchmarks.benchmark_core --iterations 1000 --series 10
-      - run: python -m build
+
+  package:
+    name: package and installed-wheel smoke
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-release.txt
+      - run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-release.txt
+      - name: Set reproducible build epoch
+        shell: bash
+        run: git show -s --format='SOURCE_DATE_EPOCH=%ct' "$GITHUB_SHA" >> "$GITHUB_ENV"
+      - run: python -m build --no-isolation
       - run: python -m twine check dist/*
+      - run: python -m scripts.verify_distributions
+      - name: Test the installed wheel outside the source checkout
+        shell: bash
+        run: |
+          version="$(python -c 'from pathlib import Path; from scripts.verify_release import verify_release; print(verify_release(Path.cwd()))')"
+          python -m venv "$RUNNER_TEMP/smoke"
+          "$RUNNER_TEMP/smoke/bin/python" -m pip install --disable-pip-version-check --no-deps dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/smoke/bin/python" -I "$GITHUB_WORKSPACE/scripts/smoke_installed.py" --version "$version"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-distributions
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7

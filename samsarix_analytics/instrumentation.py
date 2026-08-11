@@ -161,7 +161,8 @@ def instrument_wsgi(
 
         def body() -> Iterable[bytes]:
             try:
-                yield from response
+                for chunk in response:  # noqa: UP028 - yield from propagates close twice
+                    yield chunk
             finally:
                 try:
                     close = getattr(response, "close", None)

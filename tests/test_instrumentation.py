@@ -77,6 +77,40 @@ def test_wsgi_middleware_finalizes_when_stream_raises() -> None:
     }
 
 
+def test_wsgi_middleware_closes_interrupted_self_iterator_once() -> None:
+    registry = MetricRegistry()
+
+    class Response:
+        def __init__(self) -> None:
+            self.remaining = 2
+            self.close_count = 0
+
+        def __iter__(self) -> Response:
+            return self
+
+        def __next__(self) -> bytes:
+            if self.remaining == 0:
+                raise StopIteration
+            self.remaining -= 1
+            return b"chunk"
+
+        def close(self) -> None:
+            self.close_count += 1
+
+    response = Response()
+
+    def app(_environ: Mapping[str, object], start_response: StartResponse) -> Iterable[bytes]:
+        start_response("200 OK", [])
+        return response
+
+    wrapped = instrument_wsgi(app, registry)({"REQUEST_METHOD": "GET"}, _start_response)
+    iterator = iter(wrapped)
+    assert next(iterator) == b"chunk"
+    close = iterator.close  # type: ignore[attr-defined]
+    close()
+    assert response.close_count == 1
+
+
 def test_http_metrics_registration_is_reusable_and_validated() -> None:
     registry = MetricRegistry()
     first = HTTPMetrics.create(registry)

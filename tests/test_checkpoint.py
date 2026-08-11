@@ -71,6 +71,22 @@ def test_checkpoint_bytes_are_deterministic_and_round_trip_exact_state() -> None
     assert summary["recent_count"] == 2
 
 
+def test_checkpoint_loads_v1_payload_without_new_bucket_limit() -> None:
+    state = json.loads(encode_checkpoint(_populated_registry()))
+    del state["limits"]["max_histogram_buckets"]
+
+    restored = decode_checkpoint(json.dumps(state).encode())
+
+    assert restored.snapshot() == _populated_registry().snapshot()
+
+
+def test_checkpoint_policy_preserves_legacy_positional_argument_order() -> None:
+    policy = CheckpointPolicy(1, 2, 3, 4, 5)
+
+    assert policy.max_label_value_length == 5
+    assert policy.max_histogram_buckets == 64
+
+
 def test_save_is_atomic_private_and_returns_integrity_metadata(tmp_path: Path) -> None:
     target = tmp_path / "state" / "metrics.json"
     target.parent.mkdir()
@@ -116,6 +132,8 @@ def test_checkpoint_size_and_load_policy_are_enforced(tmp_path: Path) -> None:
         decode_checkpoint(payload, policy=CheckpointPolicy(max_series_per_metric=2))
     with pytest.raises(CheckpointError, match="max_histogram_samples"):
         decode_checkpoint(payload, policy=CheckpointPolicy(max_histogram_samples=1))
+    with pytest.raises(CheckpointError, match="max_histogram_buckets"):
+        decode_checkpoint(payload, policy=CheckpointPolicy(max_histogram_buckets=2))
     with pytest.raises(CheckpointError, match="max_label_value_length"):
         decode_checkpoint(payload, policy=CheckpointPolicy(max_label_value_length=10))
 
@@ -172,7 +190,7 @@ def test_checkpoint_schema_and_series_invariants_are_validated() -> None:
     state = json.loads(encode_checkpoint(_populated_registry()))
     histogram = next(metric for metric in state["metrics"] if metric["type"] == "histogram")
     histogram["series"][0]["bucket_counts"][:2] = [0, 0]
-    with pytest.raises(CheckpointError, match="smaller than recent"):
+    with pytest.raises(CheckpointError, match="cannot be empty"):
         decode_checkpoint(json.dumps(state).encode())
 
     state = json.loads(encode_checkpoint(_populated_registry()))
@@ -191,6 +209,40 @@ def test_checkpoint_schema_and_series_invariants_are_validated() -> None:
     histogram = next(metric for metric in state["metrics"] if metric["type"] == "histogram")
     histogram["series"][0]["count"] = 2**63
     with pytest.raises(CheckpointError, match="signed 64-bit"):
+        decode_checkpoint(json.dumps(state).encode())
+
+    state = json.loads(encode_checkpoint(_populated_registry()))
+    counter = next(metric for metric in state["metrics"] if metric["type"] == "counter")
+    counter["series"][0]["value"] = 10**400
+    with pytest.raises(CheckpointError, match="finite number"):
+        decode_checkpoint(json.dumps(state).encode())
+
+    state = json.loads(encode_checkpoint(_populated_registry()))
+    counter = next(metric for metric in state["metrics"] if metric["type"] == "counter")
+    counter["series"][0]["labels"]["status"] = "\ud800"
+    with pytest.raises(CheckpointError, match="valid UTF-8"):
+        decode_checkpoint(json.dumps(state).encode())
+
+
+def test_truncated_histogram_extrema_must_match_bucket_counts() -> None:
+    registry = MetricRegistry(max_histogram_samples=1)
+    histogram = registry.histogram("latency", "Latency", buckets=(5.0,))
+    histogram.observe(10)
+    histogram.observe(0)
+    state = json.loads(encode_checkpoint(registry))
+    state["metrics"][0]["series"][0]["bucket_counts"] = [2]
+
+    with pytest.raises(CheckpointError, match="below max cannot contain count"):
+        decode_checkpoint(json.dumps(state).encode())
+
+
+def test_checkpoint_rejects_bucket_arrays_before_element_conversion() -> None:
+    state = json.loads(encode_checkpoint(_populated_registry()))
+    state["limits"]["max_histogram_buckets"] = 2
+    histogram = next(metric for metric in state["metrics"] if metric["type"] == "histogram")
+    histogram["buckets"] = [1.0, 2.0, 10**400]
+
+    with pytest.raises(CheckpointError, match="more than 2 buckets"):
         decode_checkpoint(json.dumps(state).encode())
 
 
