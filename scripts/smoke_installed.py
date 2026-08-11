@@ -8,9 +8,23 @@ from __future__ import annotations
 import argparse
 import tempfile
 import urllib.request
+from importlib.util import find_spec
 from pathlib import Path
 
-from samsarix_analytics import (
+
+def _assert_installed_origin() -> None:
+    spec = find_spec("samsarix_analytics")
+    if spec is None or spec.origin is None:
+        raise RuntimeError("could not locate the installed samsarix_analytics package")
+    source_package = Path(__file__).resolve().parents[1] / "samsarix_analytics"
+    imported_origin = Path(spec.origin).resolve()
+    if imported_origin.is_relative_to(source_package):
+        raise RuntimeError("smoke test imported the source checkout instead of an installed wheel")
+
+
+_assert_installed_origin()
+
+from samsarix_analytics import (  # noqa: E402
     MetricRegistry,
     __version__,
     load_checkpoint,

@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -55,3 +58,21 @@ def test_distribution_manifest_requires_exact_release_artifacts(tmp_path: Path) 
     (dist / "unexpected.txt").write_text("unexpected", encoding="utf-8")
     with pytest.raises(ValueError, match="unexpected"):
         distribution_manifest(root, dist)
+
+
+def test_installed_smoke_rejects_source_checkout_import() -> None:
+    root = Path(__file__).resolve().parents[1]
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(root)
+
+    result = subprocess.run(
+        [sys.executable, str(root / "scripts" / "smoke_installed.py"), "--version", "0.3.0"],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "imported the source checkout" in result.stderr

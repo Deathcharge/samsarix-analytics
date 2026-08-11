@@ -32,6 +32,10 @@ python -m twine check dist/*
 python -m scripts.verify_distributions
 ```
 
+The installed-wheel smoke test must run in a clean virtual environment, outside the
+checkout, as shown in `docs/RELEASING.md`. The smoke script fails if Python resolves
+`samsarix_analytics` from the source tree.
+
 New behavior needs tests for the successful path and the important validation,
 capacity, or failure path. Public functions and classes need type annotations and
 concise docstrings. Keep the runtime dependency-free unless a dependency creates a

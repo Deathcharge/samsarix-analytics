@@ -12,7 +12,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from socket import socket
 from socketserver import ThreadingMixIn
-from threading import Lock, Thread
+from threading import BoundedSemaphore, Lock, Thread
 from typing import Any, Protocol, cast
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 
@@ -91,6 +91,16 @@ def _validate_max_response_bytes(max_response_bytes: int) -> int:
     ):
         raise ValueError("max_response_bytes must be a positive integer")
     return max_response_bytes
+
+
+def _validate_max_concurrent_requests(max_concurrent_requests: int) -> int:
+    if (
+        isinstance(max_concurrent_requests, bool)
+        or not isinstance(max_concurrent_requests, int)
+        or max_concurrent_requests < 1
+    ):
+        raise ValueError("max_concurrent_requests must be a positive integer")
+    return max_concurrent_requests
 
 
 def _is_authorized(authorization: str | None, bearer_token: str | None) -> bool:
@@ -271,10 +281,32 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     block_on_close = False
     request_timeout_seconds = 5.0
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self._worker_slots = BoundedSemaphore(32)
+        super().__init__(*args, **kwargs)
+
     def get_request(self) -> tuple[socket, Any]:
         request, client_address = super().get_request()
         request.settimeout(self.request_timeout_seconds)
         return request, client_address
+
+    def process_request(self, request: socket | tuple[bytes, socket], client_address: Any) -> None:
+        if not self._worker_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._worker_slots.release()
+            raise
+
+    def process_request_thread(
+        self, request: socket | tuple[bytes, socket], client_address: Any
+    ) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._worker_slots.release()
 
 
 @dataclass
@@ -324,6 +356,7 @@ def start_metrics_server(
     bearer_token: str | None = None,
     max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
     request_timeout_seconds: float = 5.0,
+    max_concurrent_requests: int = 32,
 ) -> MetricsServer:
     """Start a stdlib WSGI server; loopback is the secure default binding."""
 
@@ -339,6 +372,7 @@ def start_metrics_server(
     ):
         raise ValueError("request_timeout_seconds must be a finite positive number")
     configured_path = _validate_path(path)
+    configured_max_requests = _validate_max_concurrent_requests(max_concurrent_requests)
     app = make_wsgi_app(
         registry,
         path=configured_path,
@@ -353,6 +387,7 @@ def start_metrics_server(
         handler_class=_QuietRequestHandler,
     )
     server.request_timeout_seconds = float(request_timeout_seconds)
+    server._worker_slots = BoundedSemaphore(configured_max_requests)
     bound_host, bound_port = server.server_address[:2]
     thread = Thread(target=server.serve_forever, name="samsarix-metrics", daemon=True)
     thread.start()

@@ -135,7 +135,9 @@ factories support an optional bearer token, exact path matching, `GET`, `HEAD`, 
 `OPTIONS`, a 10 MiB response budget, and the Prometheus
 `text/plain; version=0.0.4` content type. Oversized output fails with `503` rather than
 being sent partially; customize `max_response_bytes` only with an explicit resource
-budget.
+budget. The standalone server also enforces a five-second per-request timeout and a
+32-request concurrency ceiling; tune `request_timeout_seconds` and
+`max_concurrent_requests` to fit the process budget.
 
 Instrument an existing application without framework-specific dependencies:
 

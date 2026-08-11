@@ -26,8 +26,8 @@ the public API remains pre-1.0.
   provenance attestations, release assets, and explicitly gated PyPI Trusted Publishing.
 - Added strict UTF-8/string label validation, bounded histogram bucket definitions,
   linear-time checkpoint reconciliation, and complete truncated-history invariants.
-- Added slow-client-resistant threaded HTTP serving, bounded credential parsing, and
-  single-owner WSGI response cleanup.
+- Added slow-client-resistant threaded HTTP serving with bounded concurrency, bounded
+  credential parsing, and single-owner WSGI response cleanup.
 - Added a hash-locked release builder set, exact distribution-manifest verification,
   injection-safe release metadata handling, and immutable GitHub release assets.
 

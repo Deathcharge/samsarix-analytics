@@ -71,6 +71,22 @@ def test_checkpoint_bytes_are_deterministic_and_round_trip_exact_state() -> None
     assert summary["recent_count"] == 2
 
 
+def test_checkpoint_loads_v1_payload_without_new_bucket_limit() -> None:
+    state = json.loads(encode_checkpoint(_populated_registry()))
+    del state["limits"]["max_histogram_buckets"]
+
+    restored = decode_checkpoint(json.dumps(state).encode())
+
+    assert restored.snapshot() == _populated_registry().snapshot()
+
+
+def test_checkpoint_policy_preserves_legacy_positional_argument_order() -> None:
+    policy = CheckpointPolicy(1, 2, 3, 4, 5)
+
+    assert policy.max_label_value_length == 5
+    assert policy.max_histogram_buckets == 64
+
+
 def test_save_is_atomic_private_and_returns_integrity_metadata(tmp_path: Path) -> None:
     target = tmp_path / "state" / "metrics.json"
     target.parent.mkdir()

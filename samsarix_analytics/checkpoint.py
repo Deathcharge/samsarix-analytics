@@ -39,8 +39,8 @@ class CheckpointPolicy:
     max_metrics: int = 1000
     max_series_per_metric: int = 100
     max_histogram_samples: int = 1024
-    max_histogram_buckets: int = 64
     max_label_value_length: int = 200
+    max_histogram_buckets: int = 64
 
     def __post_init__(self) -> None:
         for name in (
@@ -100,8 +100,14 @@ def _number(value: object, path: str) -> float:
     return normalized
 
 
-def _limit(limits: Mapping[str, object], name: str, policy_limit: int) -> int:
-    value = _integer(limits.get(name), f"limits.{name}", minimum=1)
+def _limit(
+    limits: Mapping[str, object],
+    name: str,
+    policy_limit: int,
+    *,
+    default: int | None = None,
+) -> int:
+    value = _integer(limits.get(name, default), f"limits.{name}", minimum=1)
     if value > policy_limit:
         raise CheckpointError(
             f"limits.{name}={value} exceeds the load policy limit of {policy_limit}"
@@ -235,7 +241,12 @@ def _restore_registry(root: Mapping[str, object], policy: CheckpointPolicy) -> M
         max_metrics=_limit(limits, "max_metrics", policy.max_metrics),
         max_series_per_metric=_limit(limits, "max_series_per_metric", policy.max_series_per_metric),
         max_histogram_samples=_limit(limits, "max_histogram_samples", policy.max_histogram_samples),
-        max_histogram_buckets=_limit(limits, "max_histogram_buckets", policy.max_histogram_buckets),
+        max_histogram_buckets=_limit(
+            limits,
+            "max_histogram_buckets",
+            policy.max_histogram_buckets,
+            default=policy.max_histogram_buckets,
+        ),
         max_label_value_length=_limit(
             limits, "max_label_value_length", policy.max_label_value_length
         ),

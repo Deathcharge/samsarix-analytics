@@ -37,6 +37,17 @@ provenance attestations, while the PyPI job is visibly skipped.
    python -m scripts.verify_distributions
    ```
 
+   Then prove the wheel works without help from the source checkout (POSIX shell):
+
+   ```bash
+   checkout="$(pwd)"
+   python -m venv /tmp/samsarix-analytics-smoke
+   /tmp/samsarix-analytics-smoke/bin/python -m pip install --no-deps dist/*.whl
+   cd /tmp
+   /tmp/samsarix-analytics-smoke/bin/python -I \
+     "$checkout/scripts/smoke_installed.py" --version 0.3.0
+   ```
+
 4. Merge the release-preparation pull request and require green CI on its exact head.
 5. Publish a GitHub Release from the verified `main` commit with tag `v<version>`.
 6. Confirm the Release workflow built one wheel and one source distribution, attached

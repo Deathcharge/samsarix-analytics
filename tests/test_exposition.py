@@ -200,6 +200,32 @@ def test_standalone_server_shutdown_is_not_pinned_by_slow_client() -> None:
         client.close()
 
 
+def test_standalone_server_rejects_requests_above_worker_capacity() -> None:
+    server = start_metrics_server(
+        _registry(),
+        port=0,
+        request_timeout_seconds=1,
+        max_concurrent_requests=1,
+    )
+    slow_client = socket.create_connection((server.host, server.port), timeout=1)
+    rejected_client: socket.socket | None = None
+    try:
+        slow_client.sendall(b"GET /metrics HTTP/1.1\r\nHost: local\r\n")
+        time.sleep(0.05)
+        rejected_client = socket.create_connection((server.host, server.port), timeout=1)
+        rejected_client.sendall(b"GET /metrics HTTP/1.1\r\nHost: local\r\n\r\n")
+        try:
+            response = rejected_client.recv(1024)
+        except (ConnectionResetError, OSError):
+            response = b""
+        assert response == b""
+    finally:
+        slow_client.close()
+        if rejected_client is not None:
+            rejected_client.close()
+        server.close(timeout=2)
+
+
 @pytest.mark.parametrize("port", [-1, 65536, True])
 def test_standalone_server_validates_port(port: int) -> None:
     with pytest.raises(ValueError, match="port"):
@@ -210,3 +236,9 @@ def test_standalone_server_validates_port(port: int) -> None:
 def test_standalone_server_validates_request_timeout(timeout: float) -> None:
     with pytest.raises(ValueError, match="request_timeout_seconds"):
         start_metrics_server(MetricRegistry(), port=0, request_timeout_seconds=timeout)
+
+
+@pytest.mark.parametrize("maximum", [0, -1, True, 1.5])
+def test_standalone_server_validates_worker_capacity(maximum: int) -> None:
+    with pytest.raises(ValueError, match="max_concurrent_requests"):
+        start_metrics_server(MetricRegistry(), port=0, max_concurrent_requests=maximum)
