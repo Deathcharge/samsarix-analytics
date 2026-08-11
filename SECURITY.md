@@ -20,14 +20,15 @@ values may come from untrusted application activity.
 
 The package must:
 
-- validate metric and label names before rendering;
+- validate metric and label names plus bounded UTF-8 string label values before storage;
 - escape help text and label values in Prometheus output;
 - reject non-finite values and counter decrements;
-- bound metric definitions, series cardinality, retained samples, label length, and
-  alert rules, handlers, and history;
+- bound metric definitions, series cardinality, histogram buckets, retained samples,
+  label length, and alert rules, handlers, and history;
 - isolate alert callback failures;
 - perform no implicit network, file, credential, or environment access;
 - bind the opt-in standalone metrics server to loopback by default;
+- isolate standalone HTTP clients on daemon threads with bounded request reads;
 - cap HTTP exposition by encoded response bytes before the complete registry is rendered;
 - compare optional bearer credentials without data-dependent string comparison;
 - normalize HTTP instrumentation to a fixed method/status-class label space and never
@@ -39,6 +40,11 @@ The package must:
   by atomic replacement;
 - reject directories, devices, pipes, and other non-regular checkpoint inputs;
 - avoid logging metric label values or other application data by default.
+
+Release automation must use immutable action revisions, job-scoped permissions,
+hash-locked builder inputs, immutable release filenames, short-lived OIDC credentials,
+and provenance attestations. Long-lived PyPI tokens are not an accepted release
+mechanism; see `docs/RELEASING.md`.
 
 Applications remain responsible for authorizing access to exported snapshots and HTTP
 endpoints and for avoiding secrets, personal data, and high-cardinality identifiers in

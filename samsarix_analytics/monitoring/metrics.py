@@ -46,10 +46,19 @@ class MetricSample:
 def _finite_number(value: float | int, *, field_name: str = "value") -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise MetricError(f"{field_name} must be a finite number")
-    normalized = float(value)
+    try:
+        normalized = float(value)
+    except OverflowError as exc:
+        raise MetricError(f"{field_name} must be a finite number") from exc
     if not math.isfinite(normalized):
         raise MetricError(f"{field_name} must be a finite number")
     return normalized
+
+
+def _positive_integer(value: object, *, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise MetricError(f"{field_name} must be at least 1")
+    return value
 
 
 def _finite_sum(left: float, right: float, *, field_name: str) -> float:
@@ -106,12 +115,15 @@ class _Instrument:
     ) -> None:
         if not _METRIC_NAME.fullmatch(name):
             raise MetricError("metric names must match ^[a-zA-Z_][a-zA-Z0-9_]*$")
-        if not description.strip():
+        if not isinstance(description, str) or not description.strip():
             raise MetricError("metric description cannot be empty")
-        if max_series < 1:
-            raise MetricError("max_series must be at least 1")
-        if max_label_value_length < 1:
-            raise MetricError("max_label_value_length must be at least 1")
+        normalized_description = description.strip()
+        try:
+            normalized_description.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise MetricError("metric description must be valid UTF-8") from exc
+        _positive_integer(max_series, field_name="max_series")
+        _positive_integer(max_label_value_length, field_name="max_label_value_length")
 
         normalized_names = tuple(label_names)
         if len(set(normalized_names)) != len(normalized_names):
@@ -121,13 +133,13 @@ class _Instrument:
                 raise MetricError(f"invalid label name: {label_name!r}")
 
         self.name = name
-        self.description = description.strip()
+        self.description = normalized_description
         self.label_names = normalized_names
         self.max_series = max_series
         self.max_label_value_length = max_label_value_length
         self._lock = RLock()
 
-    def _key(self, labels: Mapping[str, object]) -> tuple[str, ...]:
+    def _key(self, labels: Mapping[str, str]) -> tuple[str, ...]:
         provided = set(labels)
         expected = set(self.label_names)
         missing = sorted(expected - provided)
@@ -142,13 +154,19 @@ class _Instrument:
 
         values: list[str] = []
         for name in self.label_names:
-            value = str(labels[name])
-            if any(ord(character) < 32 and character not in "\t\n" for character in value):
-                raise MetricError(f"label {name!r} contains an unsupported control character")
+            value = labels[name]
+            if not isinstance(value, str):
+                raise MetricError(f"label {name!r} must be a string")
             if len(value) > self.max_label_value_length:
                 raise MetricError(
                     f"label {name!r} exceeds {self.max_label_value_length} characters"
                 )
+            if any(ord(character) < 32 and character not in "\t\n" for character in value):
+                raise MetricError(f"label {name!r} contains an unsupported control character")
+            try:
+                value.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise MetricError(f"label {name!r} must be valid UTF-8") from exc
             values.append(value)
         return tuple(values)
 
@@ -171,8 +189,13 @@ class _Instrument:
     def query(self, aggregation: str) -> list[MetricSample]:
         raise NotImplementedError
 
-    def prometheus_lines(self) -> list[str]:
+    def _iter_prometheus_lines(self) -> Iterator[str]:
         raise NotImplementedError
+
+    def prometheus_lines(self) -> list[str]:
+        """Return this instrument's Prometheus exposition lines."""
+
+        return list(self._iter_prometheus_lines())
 
     def _checkpoint_state(self) -> dict[str, object]:
         raise NotImplementedError
@@ -211,7 +234,7 @@ class Counter(_Instrument):
         )
         self._values: dict[tuple[str, ...], float] = {}
 
-    def inc(self, amount: float = 1.0, **labels: object) -> None:
+    def inc(self, amount: float = 1.0, **labels: str) -> None:
         increment = _finite_number(amount, field_name="counter increment")
         if increment < 0:
             raise MetricError("counter increments cannot be negative")
@@ -227,7 +250,7 @@ class Counter(_Instrument):
                 field_name="counter value",
             )
 
-    def value(self, **labels: object) -> float:
+    def value(self, **labels: str) -> float:
         key = self._key(labels)
         with self._lock:
             return self._values.get(key, 0.0)
@@ -254,17 +277,12 @@ class Counter(_Instrument):
                 for key, value in sorted(self._values.items())
             ]
 
-    def prometheus_lines(self) -> list[str]:
+    def _iter_prometheus_lines(self) -> Iterator[str]:
         with self._lock:
-            samples = [
-                f"{self.name}{self._render_labels(key)} {_format_float(value)}"
-                for key, value in sorted(self._values.items())
-            ]
-        return [
-            f"# HELP {self.name} {_escape_help(self.description)}",
-            f"# TYPE {self.name} counter",
-            *samples,
-        ]
+            yield f"# HELP {self.name} {_escape_help(self.description)}"
+            yield f"# TYPE {self.name} counter"
+            for key, value in sorted(self._values.items()):
+                yield f"{self.name}{self._render_labels(key)} {_format_float(value)}"
 
     def _checkpoint_state(self) -> dict[str, object]:
         with self._lock:
@@ -298,7 +316,7 @@ class Gauge(_Instrument):
         )
         self._values: dict[tuple[str, ...], float] = {}
 
-    def set(self, value: float, **labels: object) -> None:
+    def set(self, value: float, **labels: str) -> None:
         normalized = _finite_number(value)
         key = self._key(labels)
         with self._lock:
@@ -308,7 +326,7 @@ class Gauge(_Instrument):
                 )
             self._values[key] = normalized
 
-    def inc(self, amount: float = 1.0, **labels: object) -> None:
+    def inc(self, amount: float = 1.0, **labels: str) -> None:
         delta = _finite_number(amount, field_name="gauge increment")
         key = self._key(labels)
         with self._lock:
@@ -322,10 +340,10 @@ class Gauge(_Instrument):
                 field_name="gauge value",
             )
 
-    def dec(self, amount: float = 1.0, **labels: object) -> None:
+    def dec(self, amount: float = 1.0, **labels: str) -> None:
         self.inc(-_finite_number(amount, field_name="gauge decrement"), **labels)
 
-    def value(self, **labels: object) -> float | None:
+    def value(self, **labels: str) -> float | None:
         key = self._key(labels)
         with self._lock:
             return self._values.get(key)
@@ -352,17 +370,12 @@ class Gauge(_Instrument):
                 for key, value in sorted(self._values.items())
             ]
 
-    def prometheus_lines(self) -> list[str]:
+    def _iter_prometheus_lines(self) -> Iterator[str]:
         with self._lock:
-            samples = [
-                f"{self.name}{self._render_labels(key)} {_format_float(value)}"
-                for key, value in sorted(self._values.items())
-            ]
-        return [
-            f"# HELP {self.name} {_escape_help(self.description)}",
-            f"# TYPE {self.name} gauge",
-            *samples,
-        ]
+            yield f"# HELP {self.name} {_escape_help(self.description)}"
+            yield f"# TYPE {self.name} gauge"
+            for key, value in sorted(self._values.items()):
+                yield f"{self.name}{self._render_labels(key)} {_format_float(value)}"
 
     def _checkpoint_state(self) -> dict[str, object]:
         with self._lock:
@@ -387,6 +400,7 @@ class Histogram(_Instrument):
         buckets: Sequence[float] = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
         max_series: int = 100,
         max_samples: int = 1024,
+        max_buckets: int = 64,
         max_label_value_length: int = 200,
     ) -> None:
         super().__init__(
@@ -398,8 +412,10 @@ class Histogram(_Instrument):
         )
         if "le" in self.label_names:
             raise MetricError("histogram label name 'le' is reserved")
-        if max_samples < 1:
-            raise MetricError("max_samples must be at least 1")
+        _positive_integer(max_samples, field_name="max_samples")
+        _positive_integer(max_buckets, field_name="max_buckets")
+        if len(buckets) > max_buckets:
+            raise MetricError(f"histogram buckets exceed the {max_buckets}-bucket limit")
         normalized_buckets = tuple(
             _finite_number(bucket, field_name="histogram bucket") for bucket in buckets
         )
@@ -408,12 +424,13 @@ class Histogram(_Instrument):
 
         self.buckets = normalized_buckets
         self.max_samples = max_samples
+        self.max_buckets = max_buckets
         self._series: dict[tuple[str, ...], _HistogramSeries] = {}
 
     def definition(self) -> tuple[object, ...]:
-        return (*super().definition(), self.buckets, self.max_samples)
+        return (*super().definition(), self.buckets, self.max_samples, self.max_buckets)
 
-    def observe(self, value: float, **labels: object) -> None:
+    def observe(self, value: float, **labels: str) -> None:
         observation = _finite_number(value, field_name="histogram observation")
         key = self._key(labels)
         with self._lock:
@@ -469,7 +486,7 @@ class Histogram(_Instrument):
             ],
         }
 
-    def summary(self, **labels: object) -> dict[str, object] | None:
+    def summary(self, **labels: str) -> dict[str, object] | None:
         key = self._key(labels)
         with self._lock:
             series = self._series.get(key)
@@ -513,26 +530,20 @@ class Histogram(_Instrument):
                 samples.append(MetricSample(self.name, self._labels(key), aggregation, value))
             return samples
 
-    def prometheus_lines(self) -> list[str]:
+    def _iter_prometheus_lines(self) -> Iterator[str]:
         with self._lock:
-            samples: list[str] = []
+            yield f"# HELP {self.name} {_escape_help(self.description)}"
+            yield f"# TYPE {self.name} histogram"
             for key, series in sorted(self._series.items()):
                 for index, upper_bound in enumerate(self.buckets):
                     label_text = self._render_labels(key, (("le", _format_float(upper_bound)),))
-                    samples.append(f"{self.name}_bucket{label_text} {series.bucket_counts[index]}")
-                samples.append(
+                    yield f"{self.name}_bucket{label_text} {series.bucket_counts[index]}"
+                yield (
                     f"{self.name}_bucket{self._render_labels(key, (('le', '+Inf'),))} "
                     f"{series.count}"
                 )
-                samples.append(
-                    f"{self.name}_sum{self._render_labels(key)} {_format_float(series.total)}"
-                )
-                samples.append(f"{self.name}_count{self._render_labels(key)} {series.count}")
-        return [
-            f"# HELP {self.name} {_escape_help(self.description)}",
-            f"# TYPE {self.name} histogram",
-            *samples,
-        ]
+                yield (f"{self.name}_sum{self._render_labels(key)} {_format_float(series.total)}")
+                yield f"{self.name}_count{self._render_labels(key)} {series.count}"
 
     def _checkpoint_state(self) -> dict[str, object]:
         with self._lock:
@@ -558,7 +569,7 @@ class Histogram(_Instrument):
     def _restore_checkpoint_series(
         self,
         *,
-        labels: Mapping[str, object],
+        labels: Mapping[str, str],
         count: int,
         total: float,
         minimum: float,
@@ -610,14 +621,22 @@ class Histogram(_Instrument):
             value < normalized_minimum or value > normalized_maximum for value in normalized_recent
         ):
             raise MetricError("checkpoint histogram recent values must be within min and max")
+        sorted_recent = sorted(normalized_recent)
+        recent_index = 0
         for upper_bound, bucket_count in zip(self.buckets, normalized_counts, strict=True):
-            recent_count = sum(value <= upper_bound for value in normalized_recent)
+            while recent_index < len(sorted_recent) and sorted_recent[recent_index] <= upper_bound:
+                recent_index += 1
+            recent_count = recent_index
             if bucket_count < recent_count:
                 raise MetricError(
                     "checkpoint histogram bucket count cannot be smaller than recent observations"
                 )
             if upper_bound < normalized_minimum and bucket_count != 0:
                 raise MetricError("checkpoint histogram bucket below min must be empty")
+            if upper_bound >= normalized_minimum and bucket_count < 1:
+                raise MetricError("checkpoint histogram bucket at or above min cannot be empty")
+            if upper_bound < normalized_maximum and bucket_count >= count:
+                raise MetricError("checkpoint histogram bucket below max cannot contain count")
             if upper_bound >= normalized_maximum and bucket_count != count:
                 raise MetricError("checkpoint histogram bucket at or above max must contain count")
         if count == len(normalized_recent):
@@ -665,19 +684,18 @@ class MetricRegistry:
         max_metrics: int = 1000,
         max_series_per_metric: int = 100,
         max_histogram_samples: int = 1024,
+        max_histogram_buckets: int = 64,
         max_label_value_length: int = 200,
     ) -> None:
-        if max_metrics < 1:
-            raise MetricError("max_metrics must be at least 1")
-        if max_series_per_metric < 1:
-            raise MetricError("max_series_per_metric must be at least 1")
-        if max_histogram_samples < 1:
-            raise MetricError("max_histogram_samples must be at least 1")
-        if max_label_value_length < 1:
-            raise MetricError("max_label_value_length must be at least 1")
+        _positive_integer(max_metrics, field_name="max_metrics")
+        _positive_integer(max_series_per_metric, field_name="max_series_per_metric")
+        _positive_integer(max_histogram_samples, field_name="max_histogram_samples")
+        _positive_integer(max_histogram_buckets, field_name="max_histogram_buckets")
+        _positive_integer(max_label_value_length, field_name="max_label_value_length")
         self.max_metrics = max_metrics
         self.max_series_per_metric = max_series_per_metric
         self.max_histogram_samples = max_histogram_samples
+        self.max_histogram_buckets = max_histogram_buckets
         self.max_label_value_length = max_label_value_length
         self._instruments: dict[str, Instrument] = {}
         self._lock = RLock()
@@ -754,6 +772,7 @@ class MetricRegistry:
             buckets=buckets,
             max_series=(self.max_series_per_metric if max_series is None else max_series),
             max_samples=(self.max_histogram_samples if max_samples is None else max_samples),
+            max_buckets=self.max_histogram_buckets,
             max_label_value_length=self.max_label_value_length,
         )
         registered = self._register(instrument)
@@ -780,6 +799,7 @@ class MetricRegistry:
                 "max_metrics": self.max_metrics,
                 "max_series_per_metric": self.max_series_per_metric,
                 "max_histogram_samples": self.max_histogram_samples,
+                "max_histogram_buckets": self.max_histogram_buckets,
                 "max_label_value_length": self.max_label_value_length,
             },
             "metrics": [instrument.snapshot() for instrument in instruments],
@@ -798,7 +818,7 @@ class MetricRegistry:
         lines: list[str] = []
         encoded_size = 0
         for instrument in instruments:
-            for line in instrument.prometheus_lines():
+            for line in instrument._iter_prometheus_lines():
                 encoded_size += len(line.encode("utf-8")) + 1
                 if max_bytes is not None and encoded_size > max_bytes:
                     raise MetricError(f"Prometheus output exceeds max_bytes={max_bytes}")
@@ -816,6 +836,7 @@ class MetricRegistry:
                 "max_metrics": self.max_metrics,
                 "max_series_per_metric": self.max_series_per_metric,
                 "max_histogram_samples": self.max_histogram_samples,
+                "max_histogram_buckets": self.max_histogram_buckets,
                 "max_label_value_length": self.max_label_value_length,
             },
             "metrics": [instrument._checkpoint_state() for instrument in instruments],
@@ -823,7 +844,7 @@ class MetricRegistry:
 
 
 @contextmanager
-def track_duration(histogram: Histogram, **labels: object) -> Iterator[None]:
+def track_duration(histogram: Histogram, **labels: str) -> Iterator[None]:
     """Observe elapsed monotonic seconds in ``histogram`` on success or failure."""
 
     started = perf_counter()

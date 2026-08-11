@@ -35,7 +35,7 @@ aggregation and OpenTelemetry adapters remain out of scope for this release.
 ## Install
 
 The `samsarix-analytics` distribution is not yet published on PyPI. That name returned
-no current PyPI project record when checked on July 28, 2026, but it is not secured
+no current PyPI project record when checked on August 10, 2026, but it is not secured
 until Samsarix LLC completes an intentional first publication.
 
 From a checkout:
@@ -52,6 +52,9 @@ For development:
 ```bash
 python -m pip install -r requirements-dev.txt
 ```
+
+Maintainers should follow the checked, attested, Trusted Publishing process in
+[`docs/RELEASING.md`](docs/RELEASING.md); no long-lived PyPI credential is required.
 
 ## Five-minute walkthrough
 
@@ -192,8 +195,8 @@ coordinated snapshot is required.
 - Registering the same metric definition twice returns the original instrument.
 - Reusing a metric name with a different type, labels, limits, buckets, or description
   raises `MetricError`.
-- Missing or unknown labels, invalid names, non-finite values, counter decrements, and
-  overlong label values fail immediately.
+- Missing or unknown labels, non-string or invalid UTF-8 label values, invalid names,
+  non-finite values, counter decrements, and overlong labels fail immediately.
 - Adding a new metric or label series beyond its configured cap raises
   `CardinalityLimitError`; existing series remain usable.
 - Alert evaluation reports missing metrics or unsupported aggregations in
@@ -207,8 +210,9 @@ coordinated snapshot is required.
 Prometheus output covers counters, gauges, and classic histogram buckets, sums, and
 counts. Metric and label names are validated, while help text and label values are
 escaped before rendering. HTTP responses disable caching and content sniffing. The
-standalone server intentionally defaults to `127.0.0.1`; put public or shared-network
-endpoints behind a TLS-capable reverse proxy and access control.
+standalone server intentionally defaults to `127.0.0.1`, serves clients on bounded
+daemon threads, and applies a five-second request timeout by default. Put public or
+shared-network endpoints behind a TLS-capable reverse proxy and access control.
 
 Every unique label set is a time series. Do not use user IDs, request IDs, raw URLs,
 emails, tokens, or other unbounded/sensitive values as labels. The default limit is 100
@@ -225,7 +229,8 @@ upper bound for retained histogram observations is:
 number of histogram metrics × max series per metric × retained samples per series
 ```
 
-The default maximum is 1,024 recent samples for each of 100 series per histogram.
+The default maximum is 1,024 recent samples for each of 100 series per histogram, with
+at most 64 explicitly configured buckets per histogram.
 All-time histogram count, sum, min, max, and bucket counters remain exact; percentiles
 use only that bounded recent sample window.
 
@@ -241,10 +246,13 @@ measured local result, retention assertion, and limitations of that evidence.
 ```bash
 python -m ruff format --check .
 python -m ruff check .
-python -m mypy samsarix_analytics benchmarks
+python -m mypy samsarix_analytics benchmarks scripts
+python scripts/verify_release.py
 python -m pytest --cov=samsarix_analytics --cov-report=term-missing
-python -m build
+python -m pip install --require-hashes -r requirements-release.txt
+python -m build --no-isolation
 python -m twine check dist/*
+python -m scripts.verify_distributions
 python -m benchmarks.benchmark_core --iterations 100000 --series 10
 ```
 

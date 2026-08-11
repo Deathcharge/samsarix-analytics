@@ -39,6 +39,7 @@ class CheckpointPolicy:
     max_metrics: int = 1000
     max_series_per_metric: int = 100
     max_histogram_samples: int = 1024
+    max_histogram_buckets: int = 64
     max_label_value_length: int = 200
 
     def __post_init__(self) -> None:
@@ -47,6 +48,7 @@ class CheckpointPolicy:
             "max_metrics",
             "max_series_per_metric",
             "max_histogram_samples",
+            "max_histogram_buckets",
             "max_label_value_length",
         ):
             _positive_integer(getattr(self, name), field_name=name)
@@ -89,7 +91,10 @@ def _integer(value: object, path: str, *, minimum: int = 0) -> int:
 def _number(value: object, path: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise CheckpointError(f"{path} must be a finite number")
-    normalized = float(value)
+    try:
+        normalized = float(value)
+    except OverflowError as exc:
+        raise CheckpointError(f"{path} must be a finite number") from exc
     if not math.isfinite(normalized):
         raise CheckpointError(f"{path} must be a finite number")
     return normalized
@@ -187,15 +192,23 @@ def _restore_histogram_series(
     for index, raw_item in enumerate(series):
         item_path = f"{path}[{index}]"
         item = _object(raw_item, item_path)
+        raw_bucket_counts = _array(item.get("bucket_counts"), f"{item_path}.bucket_counts")
+        if len(raw_bucket_counts) != len(histogram.buckets):
+            raise CheckpointError(
+                f"{item_path}.bucket_counts length does not match the histogram definition"
+            )
         bucket_counts = [
             _integer(value, f"{item_path}.bucket_counts[{bucket_index}]")
-            for bucket_index, value in enumerate(
-                _array(item.get("bucket_counts"), f"{item_path}.bucket_counts")
-            )
+            for bucket_index, value in enumerate(raw_bucket_counts)
         ]
+        raw_recent = _array(item.get("recent"), f"{item_path}.recent")
+        if len(raw_recent) > histogram.max_samples:
+            raise CheckpointError(
+                f"{item_path}.recent contains more than {histogram.max_samples} samples"
+            )
         recent = [
             _number(value, f"{item_path}.recent[{recent_index}]")
-            for recent_index, value in enumerate(_array(item.get("recent"), f"{item_path}.recent"))
+            for recent_index, value in enumerate(raw_recent)
         ]
         try:
             histogram._restore_checkpoint_series(
@@ -222,6 +235,7 @@ def _restore_registry(root: Mapping[str, object], policy: CheckpointPolicy) -> M
         max_metrics=_limit(limits, "max_metrics", policy.max_metrics),
         max_series_per_metric=_limit(limits, "max_series_per_metric", policy.max_series_per_metric),
         max_histogram_samples=_limit(limits, "max_histogram_samples", policy.max_histogram_samples),
+        max_histogram_buckets=_limit(limits, "max_histogram_buckets", policy.max_histogram_buckets),
         max_label_value_length=_limit(
             limits, "max_label_value_length", policy.max_label_value_length
         ),
@@ -261,11 +275,15 @@ def _restore_registry(root: Mapping[str, object], policy: CheckpointPolicy) -> M
                     max_series=max_series,
                 )
             elif kind == "histogram":
+                raw_buckets = _array(metric.get("buckets"), f"{path}.buckets")
+                if len(raw_buckets) > registry.max_histogram_buckets:
+                    raise CheckpointError(
+                        f"{path}.buckets contains more than "
+                        f"{registry.max_histogram_buckets} buckets"
+                    )
                 buckets = [
                     _number(value, f"{path}.buckets[{bucket_index}]")
-                    for bucket_index, value in enumerate(
-                        _array(metric.get("buckets"), f"{path}.buckets")
-                    )
+                    for bucket_index, value in enumerate(raw_buckets)
                 ]
                 max_samples = _integer(metric.get("max_samples"), f"{path}.max_samples", minimum=1)
                 if max_samples > policy.max_histogram_samples:

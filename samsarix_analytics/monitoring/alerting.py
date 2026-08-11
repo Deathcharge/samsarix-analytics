@@ -263,6 +263,8 @@ class AlertManager:
                 key = self._key(rule, sample)
                 is_triggered = rule.operator.matches(sample.value, rule.threshold)
                 with self._lock:
+                    if self._rules.get(rule.name) is not rule:
+                        break
                     active = self._active.get(key)
                     if is_triggered:
                         if active is not None:

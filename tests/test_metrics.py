@@ -60,6 +60,10 @@ def test_definition_and_observation_validation() -> None:
         counter.inc(kind="toolong")
     with pytest.raises(MetricError, match="control character"):
         counter.inc(kind="a\rb")
+    with pytest.raises(MetricError, match="must be a string"):
+        counter.inc(kind=123)  # type: ignore[arg-type]
+    with pytest.raises(MetricError, match="valid UTF-8"):
+        counter.inc(kind="\ud800")
     with pytest.raises(MetricError, match="negative"):
         counter.inc(-1, kind="ok")
     with pytest.raises(MetricError, match="finite"):
@@ -70,6 +74,17 @@ def test_definition_and_observation_validation() -> None:
         counter.inc(kind="new")
     with pytest.raises(CardinalityLimitError, match="metric limit"):
         registry.gauge("other", "Other")
+    assert "events_total" in registry.to_prometheus()
+
+
+def test_rejected_label_objects_are_not_stringified() -> None:
+    class ExpensiveLabel:
+        def __str__(self) -> str:
+            raise AssertionError("untrusted __str__ must not run")
+
+    counter = MetricRegistry().counter("events_total", "Events", ("kind",))
+    with pytest.raises(MetricError, match="must be a string"):
+        counter.inc(kind=ExpensiveLabel())  # type: ignore[arg-type]
 
 
 def test_registration_is_idempotent_but_rejects_conflicts() -> None:
@@ -88,6 +103,10 @@ def test_histogram_configuration_and_aggregation_validation() -> None:
         registry.histogram("bad", "Bad", buckets=(1.0, 1.0))
     with pytest.raises(MetricError, match="reserved"):
         registry.histogram("bad_labels", "Bad", ("le",))
+    with pytest.raises(MetricError, match="bucket limit"):
+        MetricRegistry(max_histogram_buckets=1).histogram(
+            "too_many_buckets", "Bad", buckets=(1.0, 2.0)
+        )
 
     histogram = registry.histogram("duration", "Duration", buckets=(1.0,))
     histogram.observe(0.5)
@@ -154,6 +173,7 @@ def test_instrument_definition_validation(factory: object, message: str) -> None
         {"max_metrics": 0},
         {"max_series_per_metric": 0},
         {"max_histogram_samples": 0},
+        {"max_histogram_buckets": 0},
         {"max_label_value_length": 0},
     ],
 )
@@ -234,3 +254,14 @@ def test_accumulations_cannot_overflow_to_non_finite_values() -> None:
     assert summary is not None
     assert summary["count"] == 1
     assert summary["sum"] == 1e308
+
+
+def test_huge_integer_observations_are_controlled_validation_errors() -> None:
+    counter = MetricRegistry().counter("large_total", "Large total")
+    with pytest.raises(MetricError, match="finite"):
+        counter.inc(10**400)
+
+
+def test_metric_description_must_be_utf8_encodable() -> None:
+    with pytest.raises(MetricError, match="valid UTF-8"):
+        Counter("events_total", "bad \ud800 description")

@@ -23,10 +23,13 @@ Run the same checks as CI:
 ```bash
 python -m ruff format --check .
 python -m ruff check .
-python -m mypy samsarix_analytics
+python -m mypy samsarix_analytics benchmarks scripts
+python scripts/verify_release.py
 python -m pytest --cov=samsarix_analytics --cov-report=term-missing
-python -m build
+python -m pip install --require-hashes -r requirements-release.txt
+python -m build --no-isolation
 python -m twine check dist/*
+python -m scripts.verify_distributions
 ```
 
 New behavior needs tests for the successful path and the important validation,
@@ -58,3 +61,6 @@ license compatibility are documented in the pull request.
 
 The source-code license does not grant rights to Samsarix names or logos. See
 `LICENSING.md`, `NOTICE`, and `TRADEMARKS.md` for the complete project policy.
+
+Maintainers preparing a tag must follow `docs/RELEASING.md`. Do not upload a locally
+built distribution or add a long-lived package-index token to repository secrets.

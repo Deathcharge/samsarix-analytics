@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from threading import Event, Thread
 
 import pytest
 
@@ -14,6 +15,7 @@ from samsarix_analytics import (
     AlertStatus,
     Comparison,
     MetricRegistry,
+    MetricSample,
 )
 
 
@@ -198,4 +200,32 @@ def test_removing_or_replacing_rule_discards_retained_series_state() -> None:
     gauge.set(30, queue="jobs")
     assert len(manager.evaluate(registry).triggered) == 1
     assert manager.remove_rule("queue_high") is True
+    assert manager.snapshot()["active"] == []
+
+
+def test_rule_removed_during_query_cannot_recreate_alert_state() -> None:
+    query_started = Event()
+    continue_query = Event()
+
+    class PausedRegistry(MetricRegistry):
+        def query(self, name: str, aggregation: str = "value") -> list[MetricSample]:
+            samples = super().query(name, aggregation)
+            query_started.set()
+            assert continue_query.wait(2)
+            return samples
+
+    registry = PausedRegistry()
+    registry.gauge("queue_depth", "Queue depth").set(10)
+    manager = AlertManager()
+    manager.add_rule(AlertRule("queue_high", "queue_depth", Comparison.GT, 5))
+    results = []
+    evaluator = Thread(target=lambda: results.append(manager.evaluate(registry)))
+    evaluator.start()
+    assert query_started.wait(2)
+    assert manager.remove_rule("queue_high")
+    continue_query.set()
+    evaluator.join(2)
+
+    assert not evaluator.is_alive()
+    assert results and results[0].triggered == ()
     assert manager.snapshot()["active"] == []
